@@ -4,8 +4,50 @@ use image::RgbImage;
 use image::imageops::{self, FilterType};
 use rayon::prelude::*;
 
+use crate::display::DISPLAY_PANEL_SIZE;
+
 /// The landscape size the pipeline dithers at.
 pub const DISPLAY_IMAGE_SIZE: (u32, u32) = (600, 400);
+
+/// Working sizes that go by a name, for a caller that would rather not carry the pixel counts around.
+///
+/// The two panel entries are the layouts the frame buffer takes, and are the only ones [`crate::display`] can pack. The
+/// rest are what the platforms serve their images at, so a dithered photo can be posted without something else
+/// resampling it and smearing the dither pattern on the way.
+///
+/// A preset names one orientation. The other one is [`FitOptions::keep_orientation`], which transposes whichever of
+/// these is asked for: `iphone` on a portrait photo dithers at 3024x4032.
+pub const SIZE_PRESETS: [(&str, (u32, u32)); 7] = [
+    // The pipeline's own default, and the panel's portrait layout.
+    ("panel", DISPLAY_IMAGE_SIZE),
+    ("panel-portrait", DISPLAY_PANEL_SIZE),
+    // Instagram serves 1080 wide, whatever the shape.
+    ("instagram-post", (1080, 1080)),
+    ("instagram-portrait", (1080, 1350)),
+    ("instagram-landscape", (1080, 566)),
+    ("instagram-story", (1080, 1920)),
+    // The iPhone's default 4:3 photo.
+    ("iphone", (4032, 3024)),
+];
+
+/// The size a preset names, or `None` when nothing goes by that name.
+pub fn preset_size(name: &str) -> Option<(u32, u32)> {
+    SIZE_PRESETS
+        .iter()
+        .find(|(preset, _)| *preset == name)
+        .map(|(_, size)| *size)
+}
+
+/// The preset names, in the order [`SIZE_PRESETS`] lists them.
+pub const fn preset_names() -> [&'static str; SIZE_PRESETS.len()] {
+    let mut names = [""; SIZE_PRESETS.len()];
+    let mut i = 0;
+    while i < SIZE_PRESETS.len() {
+        names[i] = SIZE_PRESETS[i].0;
+        i += 1;
+    }
+    names
+}
 
 /// How a photo that does not share the working size's shape is made to fit it.
 ///
@@ -358,6 +400,41 @@ mod tests {
 
         // 3:4 is taller than the 2:3 it is going into, so the crop comes off the width.
         assert_eq!(cover_rect(photo.dimensions(), (400, 600)), (67, 0, 1066, 1600));
+    }
+
+    #[test]
+    fn every_preset_names_one_usable_size() {
+        for (name, (width, height)) in SIZE_PRESETS {
+            assert!(width > 0 && height > 0, "{name} is empty");
+            assert_eq!(preset_size(name), Some((width, height)));
+            // One name per size table entry, so a lookup is never ambiguous.
+            assert_eq!(
+                SIZE_PRESETS.iter().filter(|(other, _)| *other == name).count(),
+                1,
+                "{name} appears twice"
+            );
+        }
+
+        assert_eq!(preset_size("panel"), Some(DISPLAY_IMAGE_SIZE));
+        assert_eq!(preset_size("panel-portrait"), Some(DISPLAY_PANEL_SIZE));
+        assert_eq!(preset_size("instagram-reel"), None);
+        assert_eq!(preset_names().len(), SIZE_PRESETS.len());
+    }
+
+    #[test]
+    fn a_preset_follows_the_photo_when_the_orientation_is_kept() {
+        let portrait = RgbImage::new(1200, 1600);
+        let fit = FitOptions {
+            keep_orientation: true,
+            crop: true,
+        };
+
+        // `iphone` is landscape, so a portrait photo dithers at its transpose.
+        let target = preset_size("iphone").expect("the preset exists");
+        assert_eq!(orient_target(portrait.dimensions(), target), (3024, 4032));
+
+        let story = preset_size("instagram-story").expect("the preset exists");
+        assert_eq!(resize_to_fit(&portrait, story, fit).dimensions(), story);
     }
 
     #[test]

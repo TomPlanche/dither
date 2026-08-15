@@ -47,6 +47,13 @@ reframe-dither photo.jpg --keep-orientation --crop
 # a 3:4 photo comes out 400x600 with the sides trimmed, not stretched to 2:3
 ```
 
+A size a platform expects, rather than the panel's:
+
+```bash
+reframe-dither photo.jpg --preset instagram-story --crop
+# 1080x1920, cropped to 9:16 rather than squeezed into it
+```
+
 Also emit the packed frame buffer, ready to hand to `epd.display()`:
 
 ```bash
@@ -66,6 +73,7 @@ reframe-dither photo.jpg --buffer
 | `--bayer-size <N>` | `4` | Bayer matrix size: 2, 4 or 8. Ordered only |
 | `--threshold-scale <F>` | `1.0` | Scales the Bayer threshold amplitude. Ordered only |
 | `--size <WxH>` | `600x400` | Working size |
+| `--preset <NAME>` | none | Working size by name, from the table below. Cannot be given with `--size` |
 | `--no-resize` | off | Dither at the source resolution |
 | `--keep-orientation` | off | Resize a portrait photo to the transpose of `--size`, so it stays portrait |
 | `--crop` | off | Crop to `--size`'s aspect ratio instead of stretching the photo into it |
@@ -75,6 +83,22 @@ reframe-dither photo.jpg --buffer
 | `--dry-run` | off | Report what would be written |
 
 The defaults mirror the `processing` section of `settings.example.json`.
+
+### Presets
+
+`--preset` names a working size, so the pixel counts do not have to be remembered. Only the two panel entries can be packed into a frame buffer; the rest are there for a dithered photo that is going somewhere other than the panel.
+
+| `--preset` value | Size | What it is |
+| --- | --- | --- |
+| `panel` | 600x400 | The default working size, and what `--buffer` expects |
+| `panel-portrait` | 400x600 | The panel's own portrait layout |
+| `instagram-post` | 1080x1080 | Square post |
+| `instagram-portrait` | 1080x1350 | 4:5, the tallest post the feed takes |
+| `instagram-landscape` | 1080x566 | 1.91:1 |
+| `instagram-story` | 1080x1920 | 9:16, stories and reels |
+| `iphone` | 4032x3024 | 4:3, the iPhone's default photo size |
+
+A preset names one orientation, and `--keep-orientation` transposes whichever one is asked for: `--preset iphone --keep-orientation` dithers a portrait photo at 3024x4032. Add `--crop` and nothing is stretched. The large presets are real work rather than a relabelling, since the dither runs at the size asked for: `iphone` takes about 750 ms against 60 ms for `panel`.
 
 ### Methods
 
@@ -130,6 +154,8 @@ let sized = resize::resize_to_fit(&photo, resize::DISPLAY_IMAGE_SIZE, fit);
 ```
 
 `resize::cover_rect` returns the rectangle `crop` would keep, for a caller that wants to say what a photo will lose before running the pipeline. Nothing is copied to crop: the region is read in place, so cropping costs the same as not cropping.
+
+The named sizes are `resize::SIZE_PRESETS`, a table of `(name, (width, height))`, with `resize::preset_size` for the lookup and `resize::preset_names` for building a picker. They are plain data, so a caller is free to ignore them and pass its own size.
 
 Inputs are `image::RgbImage`, so anything that crate can decode works, and `RgbImage::from_raw` takes pixels you already have.
 

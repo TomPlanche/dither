@@ -98,6 +98,16 @@ struct Cli {
     #[arg(long, default_value = "600x400", value_name = "WxH", value_parser = parse_size)]
     size: (u32, u32),
 
+    /// Working size by name, for the sizes a platform expects. Use instead of --size.
+    #[arg(
+        long,
+        conflicts_with = "size",
+        value_name = "NAME",
+        value_parser = clap::builder::PossibleValuesParser::new(resize::preset_names())
+            .map(|name| resize::preset_size(&name).expect("the parser only accepts preset names")),
+    )]
+    preset: Option<(u32, u32)>,
+
     /// Dither at the source resolution instead of resizing first.
     #[arg(long)]
     no_resize: bool,
@@ -155,6 +165,11 @@ impl Cli {
         }
     }
 
+    /// The size to dither at: a preset if one was named, `--size` otherwise.
+    fn working_size(&self) -> (u32, u32) {
+        self.preset.unwrap_or(self.size)
+    }
+
     fn fit(&self) -> FitOptions {
         FitOptions {
             keep_orientation: self.keep_orientation,
@@ -193,7 +208,7 @@ fn process(cli: &Cli, input: &Path) -> Result<String, Box<dyn Error>> {
     let working: RgbImage = if cli.no_resize {
         photo
     } else {
-        resize::resize_to_fit(&photo, cli.size, cli.fit())
+        resize::resize_to_fit(&photo, cli.working_size(), cli.fit())
     };
 
     let options = cli.dither_options();

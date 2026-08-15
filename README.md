@@ -45,6 +45,7 @@ Defaults, accepted values, limits and the panel palette. The `defaults` object u
   "methods": ["floyd-steinberg", "atkinson", "stucki", "burkes", "jarvis", "ordered"],
   "formats": ["indexed", "rgb"],
   "bayer_sizes": [2, 4, 8],
+  "presets": [{ "name": "panel", "size": [600, 400] }, { "name": "instagram-story", "size": [1080, 1920] }, "..."],
   "defaults": { "method": "floyd-steinberg", "saturation": 0.6, "brightness": 1.1, "color": 1.4, "bayer_size": 4, "threshold_scale": 1.0, "width": 600, "height": 400, "resize": true, "keep_orientation": false, "crop": false, "scale": 1, "format": "indexed" },
   "limits": { "max_upload_bytes": 26214400, "max_dimension": 4096, "max_scale": 4, "max_source_pixels": 50000000 },
   "panel": { "image_size": [600, 400], "panel_size": [400, 600], "palette": ["#221c22", "#ffffff", "#e2d82a", "#c32b2d", "#221c22", "#004cff", "#189c22"] }
@@ -86,6 +87,7 @@ Settings ride in the query string on both POST routes. Every one is optional.
 | `threshold_scale` | `1.0` | `0.0` to `5.0`. Ordered dithering only. |
 | `width` | `600` | `1` to `4096` |
 | `height` | `400` | `1` to `4096` |
+| `preset` | none | A named working size, which takes `width` and `height`'s place. See the table below. |
 | `resize` | `true` | `false` dithers at the source resolution instead. |
 | `keep_orientation` | `false` | `true` transposes `width`x`height` for a photo that disagrees with it, so a portrait upload stays portrait. |
 | `crop` | `false` | `true` crops to `width`x`height`'s aspect ratio instead of stretching the photo into it. |
@@ -95,6 +97,22 @@ Settings ride in the query string on both POST routes. Every one is optional.
 An unknown parameter is an error rather than a silent no-op, so a typo shows up immediately.
 
 `keep_orientation` and `crop` are what an upload of any shape needs to come out undistorted: the first picks the panel layout the photo is closer to, the second trims the long side rather than stretching the short one. Neither changes the size that comes back, so a client can keep reading it off `x-image-size`.
+
+### Presets
+
+`preset` names a working size instead of spelling out `width` and `height`. `GET /api/options` carries the same table under `presets`, so a picker can be built from the API rather than hardcoded.
+
+| `preset` value | Size | What it is |
+| --- | --- | --- |
+| `panel` | 600x400 | The default working size, and the one `/api/buffer` expects |
+| `panel-portrait` | 400x600 | The panel's own portrait layout |
+| `instagram-post` | 1080x1080 | Square post |
+| `instagram-portrait` | 1080x1350 | 4:5, the tallest post the feed takes |
+| `instagram-landscape` | 1080x566 | 1.91:1 |
+| `instagram-story` | 1080x1920 | 9:16, stories and reels |
+| `iphone` | 4032x3024 | 4:3, the iPhone's default photo size |
+
+A preset names one orientation, and `keep_orientation=true` transposes it for a photo of the other one, so `preset=iphone&keep_orientation=true&crop=true` returns 3024x4032 undistorted. An unknown name is a 400 listing the ones that work. The size asked for is the size dithered at, so the large presets cost real time: about 750 ms for `iphone` against 60 ms for `panel`. Only the two panel entries can be packed by `/api/buffer`.
 
 ### Errors
 
@@ -121,6 +139,15 @@ export type DitherMethod =
   | 'jarvis'
   | 'ordered';
 
+export type DitherPreset =
+  | 'panel'
+  | 'panel-portrait'
+  | 'instagram-post'
+  | 'instagram-portrait'
+  | 'instagram-landscape'
+  | 'instagram-story'
+  | 'iphone';
+
 export type DitherParams = {
   method: DitherMethod;
   saturation: number;
@@ -130,6 +157,7 @@ export type DitherParams = {
   threshold_scale: number;
   width: number;
   height: number;
+  preset: DitherPreset;
   resize: boolean;
   keep_orientation: boolean;
   crop: boolean;

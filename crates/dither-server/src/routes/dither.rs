@@ -19,7 +19,7 @@ use serde::Serialize;
 
 use crate::config::Config;
 use crate::error::ApiError;
-use crate::params::{DitherParams, Format, MAX_DIMENSION, MAX_SCALE, MAX_SOURCE_PIXELS, Method, Params};
+use crate::params::{DitherParams, Format, MAX_DIMENSION, MAX_SCALE, MAX_SOURCE_PIXELS, Method, Params, Preset};
 
 /// Size of the returned image, as `WIDTHxHEIGHT`.
 pub const X_IMAGE_SIZE: &str = "x-image-size";
@@ -82,6 +82,13 @@ pub async fn options(State(config): State<Arc<Config>>) -> Json<OptionsBody> {
         methods: Method::ALL,
         formats: [Format::Indexed, Format::Rgb],
         bayer_sizes: [2, 4, 8],
+        presets: Preset::ALL
+            .into_iter()
+            .map(|preset| PresetSize {
+                name: preset.name(),
+                size: preset.size(),
+            })
+            .collect(),
         defaults,
         limits: Limits {
             max_upload_bytes: config.max_upload_bytes,
@@ -102,9 +109,17 @@ pub struct OptionsBody {
     methods: [Method; 6],
     formats: [Format; 2],
     bayer_sizes: [u32; 3],
+    presets: Vec<PresetSize>,
     defaults: DitherParams,
     limits: Limits,
     panel: Panel,
+}
+
+/// A `preset` name and the size it stands for, so a client can label its own picker.
+#[derive(Serialize)]
+struct PresetSize {
+    name: &'static str,
+    size: (u32, u32),
 }
 
 #[derive(Serialize)]
@@ -203,7 +218,7 @@ fn prepare(source: &[u8], params: DitherParams) -> Result<RgbImage, ApiError> {
         )));
     }
 
-    Ok(match params.target_size() {
+    Ok(match params.working_size() {
         Some(size) => resize::resize_to_fit(&photo, size, params.fit()),
         None => photo,
     })

@@ -171,6 +171,74 @@ async fn keep_orientation_transposes_the_working_size_for_a_portrait_upload() {
 }
 
 #[tokio::test]
+async fn a_preset_names_the_working_size() {
+    let response = call(post("/api/dither?preset=instagram-story", "image/png", source_png())).await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["x-image-size"], "1080x1920");
+
+    // It takes width and height's place rather than being combined with them. The panel presets stand in for the
+    // platform ones here, which dither at up to 2 MP apiece.
+    let uri = "/api/dither?preset=panel-portrait&width=320&height=240";
+    let response = call(post(uri, "image/png", source_png())).await;
+    assert_eq!(response.headers()["x-image-size"], "400x600");
+
+    // And it follows the photo when the orientation is kept: the portrait preset turned over for a landscape upload.
+    let uri = "/api/dither?preset=panel-portrait&keep_orientation=true";
+    let response = call(post(uri, "image/png", source_png())).await;
+    assert_eq!(response.headers()["x-image-size"], "600x400");
+}
+
+#[tokio::test]
+async fn options_lists_every_preset_with_its_size() {
+    let json: serde_json::Value =
+        serde_json::from_slice(&body_bytes(call(get("/api/options")).await).await).expect("options is JSON");
+
+    let presets = json["presets"].as_array().expect("presets is an array");
+    let names: Vec<&str> = presets
+        .iter()
+        .map(|preset| preset["name"].as_str().expect("a preset name"))
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "panel",
+            "panel-portrait",
+            "instagram-post",
+            "instagram-portrait",
+            "instagram-landscape",
+            "instagram-story",
+            "iphone"
+        ]
+    );
+    assert_eq!(presets[0]["size"], serde_json::json!([600, 400]));
+
+    // The two panel entries end to end. That every listed name deserialises is a unit test; dithering all seven here
+    // would spend most of the suite's time on the 12 MP one.
+    for preset in presets.iter().take(2) {
+        let name = preset["name"].as_str().expect("a preset name");
+        let response = call(post(&format!("/api/dither?preset={name}"), "image/png", source_png())).await;
+        assert_eq!(response.status(), StatusCode::OK, "{name} should be accepted");
+
+        let size = preset["size"].as_array().expect("a preset size");
+        assert_eq!(response.headers()["x-image-size"], format!("{}x{}", size[0], size[1]));
+    }
+}
+
+#[tokio::test]
+async fn an_unknown_preset_is_refused_with_the_names_that_work() {
+    let response = call(post("/api/dither?preset=tiktok", "image/png", source_png())).await;
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let json: serde_json::Value = serde_json::from_slice(&body_bytes(response).await).expect("the error is JSON");
+    let error = json["error"].as_str().expect("error is a string");
+    assert!(
+        error.contains("instagram-story"),
+        "the message should list the names: {error}"
+    );
+}
+
+#[tokio::test]
 async fn crop_keeps_the_middle_of_a_photo_the_working_size_does_not_fit() {
     let uri = "/api/dither?width=40&height=40&crop=true";
     let response = call(post(uri, "image/png", banded_png())).await;

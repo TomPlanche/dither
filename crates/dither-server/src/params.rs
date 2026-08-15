@@ -58,6 +58,52 @@ impl From<Method> for DitherMethod {
     }
 }
 
+/// A working size that goes by name.
+///
+/// The variants mirror [`reframe_dither::SIZE_PRESETS`], which is where the pixel counts come from. Serde does the
+/// validating: an unknown name is refused with the list of the ones that work.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Preset {
+    Panel,
+    PanelPortrait,
+    InstagramPost,
+    InstagramPortrait,
+    InstagramLandscape,
+    InstagramStory,
+    Iphone,
+}
+
+impl Preset {
+    pub const ALL: [Preset; 7] = [
+        Preset::Panel,
+        Preset::PanelPortrait,
+        Preset::InstagramPost,
+        Preset::InstagramPortrait,
+        Preset::InstagramLandscape,
+        Preset::InstagramStory,
+        Preset::Iphone,
+    ];
+
+    /// The name this goes by, in both the query string and the pipeline's own table.
+    pub fn name(self) -> &'static str {
+        match self {
+            Preset::Panel => "panel",
+            Preset::PanelPortrait => "panel-portrait",
+            Preset::InstagramPost => "instagram-post",
+            Preset::InstagramPortrait => "instagram-portrait",
+            Preset::InstagramLandscape => "instagram-landscape",
+            Preset::InstagramStory => "instagram-story",
+            Preset::Iphone => "iphone",
+        }
+    }
+
+    /// The size it names.
+    pub fn size(self) -> (u32, u32) {
+        reframe_dither::preset_size(self.name()).expect("every preset names a size the pipeline knows")
+    }
+}
+
 /// How to encode the PNG that comes back.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -82,10 +128,15 @@ pub struct DitherParams {
     pub bayer_size: u32,
     /// Scales the Bayer threshold amplitude. Ordered dithering only.
     pub threshold_scale: f64,
-    /// Working width, used unless `resize` is false.
+    /// Working width, used unless `resize` is false or `preset` names a size.
     pub width: u32,
-    /// Working height, used unless `resize` is false.
+    /// Working height, used unless `resize` is false or `preset` names a size.
     pub height: u32,
+    /// A named working size, which takes `width` and `height`'s place.
+    ///
+    /// Left out of `GET /api/options` when unset, where the `presets` list says what the names are instead.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preset: Option<Preset>,
     /// Resize to `width`x`height` first. False dithers at the source resolution.
     pub resize: bool,
     /// Keep the photo's orientation: a portrait photo resizes to `height`x`width`.
@@ -109,6 +160,7 @@ impl Default for DitherParams {
             threshold_scale: defaults.threshold_scale,
             width: reframe_dither::DISPLAY_IMAGE_SIZE.0,
             height: reframe_dither::DISPLAY_IMAGE_SIZE.1,
+            preset: None,
             resize: true,
             keep_orientation: false,
             crop: false,
@@ -153,9 +205,14 @@ impl DitherParams {
         })
     }
 
-    /// The working size, or `None` when the source resolution is kept.
-    pub fn target_size(self) -> Option<(u32, u32)> {
-        self.resize.then_some((self.width, self.height))
+    /// The size to dither at, or `None` when the source resolution is kept.
+    ///
+    /// A preset takes `width` and `height`'s place rather than being combined with them.
+    pub fn working_size(self) -> Option<(u32, u32)> {
+        self.resize.then(|| match self.preset {
+            Some(preset) => preset.size(),
+            None => (self.width, self.height),
+        })
     }
 
     /// How a photo that does not share the working size's shape is fitted to it.
@@ -252,9 +309,48 @@ mod tests {
     }
 
     #[test]
+    fn every_preset_names_a_size_the_api_can_serve() {
+        for preset in Preset::ALL {
+            let (width, height) = preset.size();
+            assert!(
+                (1..=MAX_DIMENSION).contains(&width) && (1..=MAX_DIMENSION).contains(&height),
+                "{} is {width}x{height}, outside what the API accepts",
+                preset.name()
+            );
+
+            // The name the query string uses is the one the pipeline's table is keyed by, and it parses back, so the
+            // `presets` listing can never advertise a name the endpoints refuse.
+            let quoted = serde_json::to_string(&preset).expect("preset serialises");
+            assert_eq!(quoted.trim_matches('"'), preset.name());
+            assert_eq!(
+                serde_json::from_str::<Preset>(&quoted).expect("preset parses back"),
+                preset
+            );
+        }
+
+        assert_eq!(Preset::InstagramStory.size(), (1080, 1920));
+        assert_eq!(Preset::Panel.size(), reframe_dither::DISPLAY_IMAGE_SIZE);
+    }
+
+    #[test]
+    fn a_preset_takes_the_place_of_width_and_height() {
+        let params = DitherParams {
+            preset: Some(Preset::InstagramPortrait),
+            width: 320,
+            height: 240,
+            ..Default::default()
+        };
+        assert_eq!(params.working_size(), Some((1080, 1350)));
+
+        // Without one, the pair is used as it was sent.
+        let params = DitherParams { preset: None, ..params };
+        assert_eq!(params.working_size(), Some((320, 240)));
+    }
+
+    #[test]
     fn the_fitting_flags_reach_the_pipeline() {
         let params = DitherParams::default();
-        assert_eq!(params.target_size(), Some((600, 400)));
+        assert_eq!(params.working_size(), Some((600, 400)));
         assert_eq!(params.fit(), FitOptions::default());
 
         let params = DitherParams {
@@ -275,7 +371,7 @@ mod tests {
             resize: false,
             ..params
         };
-        assert_eq!(params.target_size(), None);
+        assert_eq!(params.working_size(), None);
     }
 
     #[test]
