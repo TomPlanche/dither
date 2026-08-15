@@ -134,6 +134,16 @@ What is left is the part specific to this panel: its palette and saturation blen
 
 That last one is a deliberate exception. `image::imageops::dither` clamps the accumulated error back into a `u8` after every diffusion step, which on a seven-colour palette throws away most of the error and visibly drains the colour out of the result. The `dither` crate gets the arithmetic right but hard-depends on `clap 3.0.0-beta` and `image 0.23`, so it cannot sit alongside `image` 0.25. The loop in `diffusion.rs` is about 40 lines and keeps the running error in `f32`; the kernel table it reads is what gives you Atkinson, Stucki, Burkes and Jarvis for free.
 
+## Performance
+
+`benches/pipeline.rs` times every stage over the photos in `assets/`, so the rows add up to what the CLI actually spends:
+
+```bash
+cargo bench -p reframe-dither
+```
+
+[BENCHMARKS.md](BENCHMARKS.md) logs every measurement, one entry per change that moves the numbers, along with the method and the machine each was taken on.
+
 ## Fidelity
 
 `tests/parity.rs` measures agreement against fixtures generated from the real `ImageProcessor`. Regenerate them with:
