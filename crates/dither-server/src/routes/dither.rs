@@ -12,8 +12,8 @@ use axum::extract::{FromRequest, Multipart, Request, State};
 use axum::http::header::CONTENT_TYPE;
 use axum::response::{IntoResponse, Response};
 use reframe_dither::{
-    DISPLAY_IMAGE_SIZE, DISPLAY_PANEL_SIZE, IndexedImage, Orientation, PanelPalette, RgbImage, apply_dithering,
-    display, io, resize,
+    DISPLAY_IMAGE_SIZE, DISPLAY_PANEL_SIZE, IndexedImage, MAX_CROP_ZOOM, Orientation, PanelPalette, RgbImage,
+    apply_dithering, display, io, resize,
 };
 use serde::Serialize;
 
@@ -25,6 +25,11 @@ use crate::params::{DitherParams, Format, MAX_DIMENSION, MAX_SCALE, MAX_SOURCE_P
 pub const X_IMAGE_SIZE: &str = "x-image-size";
 /// How the frame buffer had to be rotated: `panel` or `rotated`.
 pub const X_PANEL_ORIENTATION: &str = "x-panel-orientation";
+/// The part of the upload that was read, as `X,Y,WIDTH,HEIGHT` in source pixels.
+///
+/// The whole photo when `crop` is off, so it always says what the source measured, which is what a client needs before
+/// it can name a corner in `crop_from`.
+pub const X_CROP_RECT: &str = "x-crop-rect";
 
 /// `POST /api/dither` — a dithered PNG.
 pub async fn dither(params: Params, request: Request) -> Result<Response, ApiError> {
@@ -42,6 +47,7 @@ pub async fn dither(params: Params, request: Request) -> Result<Response, ApiErr
             (CONTENT_TYPE.as_str(), content_type),
             ("cache-control", "no-store"),
             (X_IMAGE_SIZE, png.size.as_str()),
+            (X_CROP_RECT, png.crop.as_str()),
         ],
         png.bytes,
     )
@@ -63,6 +69,7 @@ pub async fn buffer(params: Params, request: Request) -> Result<Response, ApiErr
             (CONTENT_TYPE.as_str(), "application/octet-stream"),
             ("cache-control", "no-store"),
             (X_IMAGE_SIZE, panel.size.as_str()),
+            (X_CROP_RECT, panel.crop.as_str()),
             (X_PANEL_ORIENTATION, panel.orientation),
         ],
         panel.bytes,
@@ -95,6 +102,7 @@ pub async fn options(State(config): State<Arc<Config>>) -> Json<OptionsBody> {
             max_dimension: MAX_DIMENSION,
             max_scale: MAX_SCALE,
             max_source_pixels: MAX_SOURCE_PIXELS,
+            max_crop_zoom: MAX_CROP_ZOOM,
         },
         panel: Panel {
             image_size: DISPLAY_IMAGE_SIZE,
@@ -106,7 +114,7 @@ pub async fn options(State(config): State<Arc<Config>>) -> Json<OptionsBody> {
 
 #[derive(Serialize)]
 pub struct OptionsBody {
-    methods: [Method; 6],
+    methods: [Method; 7],
     formats: [Format; 2],
     bayer_sizes: [u32; 3],
     presets: Vec<PresetSize>,
@@ -128,6 +136,7 @@ struct Limits {
     max_dimension: u32,
     max_scale: u32,
     max_source_pixels: u64,
+    max_crop_zoom: f32,
 }
 
 #[derive(Serialize)]
@@ -144,18 +153,32 @@ fn hex(rgb: &[u8; 3]) -> String {
 struct Rendered {
     bytes: Vec<u8>,
     size: String,
+    crop: String,
 }
 
 struct PanelFrame {
     bytes: Vec<u8>,
     size: String,
+    crop: String,
     orientation: &'static str,
 }
 
 /// Decode, resize, dither and re-encode. Runs on a blocking thread.
 fn render_png(source: &[u8], params: DitherParams) -> Result<Rendered, ApiError> {
     let options = params.to_options()?;
-    let working = prepare(source, params)?;
+    let (working, crop) = prepare(source, params)?;
+
+    // `method=none` stops here: there is no palette to index, so the framing comes back as a plain RGB PNG.
+    let Some(options) = options else {
+        let plain = resize::scale_nearest(&working, params.scale);
+        let bytes =
+            io::encode_rgb_png(&plain).map_err(|e| ApiError::internal(format!("could not encode the result: {e}")))?;
+        return Ok(Rendered {
+            size: format!("{}x{}", plain.width(), plain.height()),
+            bytes,
+            crop,
+        });
+    };
 
     let dithered = apply_dithering(&working, &options);
     let dithered: IndexedImage = if params.scale > 1 {
@@ -173,13 +196,16 @@ fn render_png(source: &[u8], params: DitherParams) -> Result<Rendered, ApiError>
     Ok(Rendered {
         size: format!("{}x{}", dithered.width(), dithered.height()),
         bytes,
+        crop,
     })
 }
 
 /// Decode, resize, dither and pack into the panel's frame buffer.
 fn render_buffer(source: &[u8], params: DitherParams) -> Result<PanelFrame, ApiError> {
-    let options = params.to_options()?;
-    let working = prepare(source, params)?;
+    let options = params.to_options()?.ok_or_else(|| {
+        ApiError::bad_request("the panel takes palette slots, so method=none has nothing to pack; pick a dither")
+    })?;
+    let (working, crop) = prepare(source, params)?;
 
     let (bytes, dithered, orientation) = display::dither_to_display_buffer(&working, &options);
     let orientation = match orientation {
@@ -203,12 +229,17 @@ fn render_buffer(source: &[u8], params: DitherParams) -> Result<PanelFrame, ApiE
     Ok(PanelFrame {
         size: format!("{}x{}", dithered.width(), dithered.height()),
         bytes,
+        crop,
         orientation,
     })
 }
 
 /// Decodes the upload and resizes it to the working size.
-fn prepare(source: &[u8], params: DitherParams) -> Result<RgbImage, ApiError> {
+///
+/// Returns the region of the source that was read, for the `x-crop-rect` header. It comes from the pipeline's own
+/// [`resize::fitted_rect`] rather than being worked out again here, so what the header reports cannot drift from what
+/// the resize did.
+fn prepare(source: &[u8], params: DitherParams) -> Result<(RgbImage, String), ApiError> {
     let photo = io::decode_rgb(source).map_err(|e| ApiError::bad_request(format!("could not read the image: {e}")))?;
 
     let (width, height) = photo.dimensions();
@@ -218,10 +249,15 @@ fn prepare(source: &[u8], params: DitherParams) -> Result<RgbImage, ApiError> {
         )));
     }
 
-    Ok(match params.working_size() {
-        Some(size) => resize::resize_to_fit(&photo, size, params.fit()),
-        None => photo,
-    })
+    let Some(size) = params.working_size() else {
+        return Ok((photo, format!("0,0,{width},{height}")));
+    };
+
+    let (x, y, kept_w, kept_h) = resize::fitted_rect((width, height), size, params.fit());
+    Ok((
+        resize::resize_to_fit(&photo, size, params.fit()),
+        format!("{x},{y},{kept_w},{kept_h}"),
+    ))
 }
 
 /// Reads the image out of either a raw body or a multipart `image` field.

@@ -42,12 +42,12 @@ Defaults, accepted values, limits and the panel palette. The `defaults` object u
 
 ```json
 {
-  "methods": ["floyd-steinberg", "atkinson", "stucki", "burkes", "jarvis", "ordered"],
+  "methods": ["floyd-steinberg", "atkinson", "stucki", "burkes", "jarvis", "ordered", "none"],
   "formats": ["indexed", "rgb"],
   "bayer_sizes": [2, 4, 8],
   "presets": [{ "name": "panel", "size": [600, 400] }, { "name": "instagram-story", "size": [1080, 1920] }, "..."],
   "defaults": { "method": "floyd-steinberg", "saturation": 0.6, "brightness": 1.1, "color": 1.4, "bayer_size": 4, "threshold_scale": 1.0, "width": 600, "height": 400, "resize": true, "keep_orientation": false, "crop": false, "scale": 1, "format": "indexed" },
-  "limits": { "max_upload_bytes": 26214400, "max_dimension": 4096, "max_scale": 4, "max_source_pixels": 50000000 },
+  "limits": { "max_upload_bytes": 26214400, "max_dimension": 4096, "max_scale": 4, "max_source_pixels": 50000000, "max_crop_zoom": 10.0 },
   "panel": { "image_size": [600, 400], "panel_size": [400, 600], "palette": ["#221c22", "#ffffff", "#e2d82a", "#c32b2d", "#221c22", "#004cff", "#189c22"] }
 }
 ```
@@ -56,7 +56,7 @@ The palette is the blend at the default saturation, ready to drop into CSS.
 
 ### `POST /api/dither`
 
-Returns the dithered image as `image/png`, with an `x-image-size` header carrying `WIDTHxHEIGHT`.
+Returns the dithered image as `image/png`, with an `x-image-size` header carrying `WIDTHxHEIGHT` and an `x-crop-rect` header carrying `X,Y,WIDTH,HEIGHT`, the part of the upload that was read.
 
 ### `POST /api/buffer`
 
@@ -79,7 +79,7 @@ Settings ride in the query string on both POST routes. Every one is optional.
 
 | Parameter | Default | Accepts |
 | --- | --- | --- |
-| `method` | `floyd-steinberg` | `floyd-steinberg`, `atkinson`, `stucki`, `burkes`, `jarvis`, `ordered` |
+| `method` | `floyd-steinberg` | `floyd-steinberg`, `atkinson`, `stucki`, `burkes`, `jarvis`, `ordered`, or `none` for no dithering at all |
 | `saturation` | `0.6` | `0.0` to `1.0`. Blends between the muted and the pure panel palettes. |
 | `brightness` | `1.1` | `0.0` to `5.0`. Applied before dithering. |
 | `color` | `1.4` | `0.0` to `5.0`. Applied before dithering, after brightness. |
@@ -91,12 +91,28 @@ Settings ride in the query string on both POST routes. Every one is optional.
 | `resize` | `true` | `false` dithers at the source resolution instead. |
 | `keep_orientation` | `false` | `true` transposes `width`x`height` for a photo that disagrees with it, so a portrait upload stays portrait. |
 | `crop` | `false` | `true` crops to `width`x`height`'s aspect ratio instead of stretching the photo into it. |
+| `crop_from` | `center` | Which part the crop keeps: `center`, `top`, `bottom`, `left`, `right`, or a corner as `X,Y`. Needs `crop=true`. |
+| `crop_zoom` | `1.0` | `1.0` to `10.0`. Above 1.0 the crop keeps a proportionally smaller rectangle. Needs `crop=true`. Not needed with a corner. |
 | `scale` | `1` | `1` to `4`. Nearest-neighbour upscale of the result. |
 | `format` | `indexed` | `indexed` for a palette PNG, `rgb` for a plain one. |
 
 An unknown parameter is an error rather than a silent no-op, so a typo shows up immediately.
 
 `keep_orientation` and `crop` are what an upload of any shape needs to come out undistorted: the first picks the panel layout the photo is closer to, the second trims the long side rather than stretching the short one. Neither changes the size that comes back, so a client can keep reading it off `x-image-size`.
+
+`method=none` skips the dither and returns the photo resized and cropped, and nothing else. It is for checking the framing, where the dither pattern is in the way. `resize`, `preset`, `crop`, `crop_from`, `crop_zoom`, `scale` and the `x-crop-rect` header all work the same; the palette settings have nothing to act on, and `format` has no palette to index, so the result is always a plain RGB PNG. `POST /api/buffer` refuses it with a 400, since the panel takes palette slots.
+
+`crop_from` says which part the crop keeps, and the two forms work from opposite ends.
+
+An **anchor** (`center`, `top`, `bottom`, `left`, `right`) asks for the largest rectangle the working size's ratio allows and puts it against a side. Such a rectangle spans the upload's full width or its full height, never neither, so an anchor can only slide it along whichever axis has slack: `top` on a photo that is losing its sides does the same as `center`.
+
+A **corner** (`X,Y` in source pixels, `0,0` being the top-left) is the other way round. The corner is where the crop starts, so it is kept as given, and the rectangle is the largest that fits in what is left below and to the right of it. `crop_from=0,200` therefore drops the top 200 rows of any photo. What it costs is size: a corner far into the upload leaves a small rectangle to blow back up to the working size, and past the last pixel it keeps that pixel. `x-crop-rect` reports what was kept.
+
+Two spellings are a 400 rather than a silent centre crop: one that is neither an anchor nor `X,Y`, and `crop_from` without `crop=true`, which would have nothing to place. Same for `crop_zoom`. That is why both are absent from `defaults` when unset, so posting the reported defaults back unchanged stays a valid request.
+
+`crop_zoom` shrinks whatever the origin settled on, both sides by the same factor so the ratio holds. It is what moves an anchor in from the edges: a 1536x2048 photo into `instagram-story` keeps 1152x2048 centred at `crop_zoom=1.0`, and 576x1024 at `crop_zoom=2`, where `top` and `bottom` then differ. A corner does not need it, since a corner already decides where the rectangle starts.
+
+Both POST routes answer with `x-crop-rect: X,Y,WIDTH,HEIGHT`, the part of the upload that was read, in source pixels. It is the whole photo when `crop` is off, so it always reports what the upload measured, which is what a client needs before it can name a corner. It comes from the pipeline's own geometry rather than being worked out again, so it cannot disagree with the image that came back.
 
 ### Presets
 
@@ -161,6 +177,10 @@ export type DitherParams = {
   resize: boolean;
   keep_orientation: boolean;
   crop: boolean;
+  /** Needs `crop: true`. 'center' | 'top' | 'bottom' | 'left' | 'right', or a corner as `${number},${number}` */
+  crop_from: string;
+  /** Needs `crop: true`. 1.0 keeps as much as the ratio allows, above that keeps less and frees both axes. */
+  crop_zoom: number;
   scale: number;
   format: 'indexed' | 'rgb';
 };
