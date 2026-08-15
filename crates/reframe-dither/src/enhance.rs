@@ -23,6 +23,10 @@ pub fn luma(r: u8, g: u8, b: u8) -> u8 {
 }
 
 /// `ImageEnhance.Brightness`: blends away from black.
+///
+/// Precomputing all 256 answers into a lookup table was tried and measured 8% slower: the blend is one multiply and a
+/// clamp, which the compiler vectorises across the buffer, and a table turns that into a gather it cannot. See
+/// BENCHMARKS.md, entry 7.
 pub fn brightness(image: &mut RgbImage, factor: f32) {
     if factor == 1.0 {
         return;

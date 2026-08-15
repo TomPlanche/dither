@@ -34,4 +34,6 @@ image = { version = "0.25", default-features = false }
 palette = { version = "0.7.7", default-features = false, features = ["std"] }
 # Palette PNG output, which `image` cannot write.
 png = { version = "0.18", optional = true }
+# Row-level parallelism in the hot stages, and the CLI's batch loop.
+rayon = "1.11"
 clap = { version = "4", features = ["derive"], optional = true }

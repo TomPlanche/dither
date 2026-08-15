@@ -9,6 +9,7 @@
 //!   5-bit RGB cube.
 
 use image::RgbImage;
+use rayon::prelude::*;
 
 use crate::bayer::{self, BayerSize};
 use crate::buffer::IndexedImage;
@@ -108,17 +109,24 @@ pub struct OrderedLut {
 
 impl OrderedLut {
     /// Precomputes the table for a palette.
+    ///
+    /// The 32768 sRGB to CIELAB conversions are independent, so they are spread across cores. Reuse the table across a
+    /// batch when you can: it depends only on the palette, and the palette only on the saturation.
     pub fn new(palette: &PanelPalette) -> Self {
+        const CHUNK: usize = 1024;
         let mut table = vec![0u8; 32768];
-        for (cell, slot) in table.iter_mut().enumerate() {
-            // Cell centres: 5 bits per channel, so steps of 8 centred at 4.
-            let rgb = [
-                ((cell >> 10) as u8) * 8 + 4,
-                (((cell >> 5) & 31) as u8) * 8 + 4,
-                ((cell & 31) as u8) * 8 + 4,
-            ];
-            *slot = palette.nearest_lab(to_lab(rgb)) as u8;
-        }
+        table.par_chunks_mut(CHUNK).enumerate().for_each(|(chunk, slots)| {
+            for (offset, slot) in slots.iter_mut().enumerate() {
+                let cell = chunk * CHUNK + offset;
+                // Cell centres: 5 bits per channel, so steps of 8 centred at 4.
+                let rgb = [
+                    ((cell >> 10) as u8) * 8 + 4,
+                    (((cell >> 5) & 31) as u8) * 8 + 4,
+                    ((cell & 31) as u8) * 8 + 4,
+                ];
+                *slot = palette.nearest_lab(to_lab(rgb)) as u8;
+            }
+        });
         Self { table }
     }
 
@@ -141,23 +149,34 @@ fn channel_thresholds(palette: &PanelPalette, threshold_scale: f32) -> [f32; 3] 
 }
 
 /// Ordered (Bayer) dithering.
+///
+/// Unlike error diffusion, every pixel here is independent, so the rows run in parallel.
 fn ordered(image: &RgbImage, palette: PanelPalette, size: BayerSize, threshold_scale: f32) -> IndexedImage {
     let lut = OrderedLut::new(&palette);
     let thresholds = channel_thresholds(&palette, threshold_scale);
     let side = size.side();
     let matrix = bayer::matrix(size);
 
-    let indices = image::GrayImage::from_fn(image.width(), image.height(), |x, y| {
-        let threshold = matrix[(y as usize % side) * side + (x as usize % side)] - 0.5;
-        let px = image.get_pixel(x, y).0;
-        let mut cell = [0usize; 3];
-        for (channel, slot) in cell.iter_mut().enumerate() {
-            let noisy = (px[channel] as f32 + threshold * thresholds[channel]).clamp(0.0, 255.0);
-            *slot = (noisy as usize / 8).min(31);
+    let (width, height) = image.dimensions();
+    let w = width as usize;
+    let source = image.as_raw();
+    let mut indices = vec![0u8; w * (height as usize)];
+
+    indices.par_chunks_mut(w).enumerate().for_each(|(y, out_row)| {
+        let row = &matrix[(y % side) * side..(y % side) * side + side];
+        let src_row = &source[y * w * 3..(y + 1) * w * 3];
+        for (x, (px, slot)) in src_row.chunks_exact(3).zip(out_row.iter_mut()).enumerate() {
+            let threshold = row[x % side] - 0.5;
+            let mut cell = [0usize; 3];
+            for (channel, bucket) in cell.iter_mut().enumerate() {
+                let noisy = (px[channel] as f32 + threshold * thresholds[channel]).clamp(0.0, 255.0);
+                *bucket = (noisy as usize / 8).min(31);
+            }
+            *slot = lut.lookup(cell[0], cell[1], cell[2]);
         }
-        image::Luma([lut.lookup(cell[0], cell[1], cell[2])])
     });
 
+    let indices = image::GrayImage::from_raw(width, height, indices).expect("buffer matches the dimensions");
     IndexedImage::new(indices, palette)
 }
 

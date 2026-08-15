@@ -100,6 +100,11 @@ pub const KERNELS: [Kernel; 5] = [FLOYD_STEINBERG, ATKINSON, STUCKI, BURKES, JAR
 /// Quantises to `palette`, diffusing the error with `kernel`.
 ///
 /// Returns one palette slot per pixel.
+///
+/// The error buffer covers the whole image rather than just the two or three rows a kernel can still reach. That looks
+/// wasteful and is not: keeping only the live rows was tried three ways and every one measured slower, because the
+/// window has to be addressed as a ring and the per-tap cost of that outweighs the locality it buys. See BENCHMARKS.md,
+/// entry 5.
 pub fn diffuse(image: &RgbImage, palette: &PanelPalette, kernel: &Kernel) -> GrayImage {
     let (width, height) = image.dimensions();
     let mut spill = vec![[0f32; 3]; (width as usize) * (height as usize)];

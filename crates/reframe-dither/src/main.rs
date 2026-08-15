@@ -1,12 +1,14 @@
 //! Command line front end for the reframe dithering pipeline.
 
 use std::error::Error;
+use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::builder::TypedValueParser;
 use clap::{Parser, ValueEnum};
+use rayon::prelude::*;
 use reframe_dither::{
     BayerSize, DitherMethod, DitherOptions, IndexedImage, Orientation, RgbImage, apply_dithering, display, io, resize,
 };
@@ -163,7 +165,11 @@ impl Cli {
     }
 }
 
-fn process(cli: &Cli, input: &Path) -> Result<(), Box<dyn Error>> {
+/// Runs the pipeline for one input and returns what should be printed for it.
+///
+/// The report is returned rather than printed because inputs are processed in parallel, and interleaved lines would be
+/// unreadable.
+fn process(cli: &Cli, input: &Path) -> Result<String, Box<dyn Error>> {
     let started = std::time::Instant::now();
     let photo = io::load_rgb(input)?;
     let source_size = photo.dimensions();
@@ -206,11 +212,11 @@ fn process(cli: &Cli, input: &Path) -> Result<(), Box<dyn Error>> {
     let buffer_path = out_path.with_extension("bin");
 
     if cli.dry_run {
-        println!("{} -> {}", input.display(), out_path.display());
+        let mut report = format!("{} -> {}", input.display(), out_path.display());
         if buffer.is_some() {
-            println!("{} -> {}", input.display(), buffer_path.display());
+            let _ = write!(report, "\n{} -> {}", input.display(), buffer_path.display());
         }
-        return Ok(());
+        return Ok(report);
     }
 
     if let Some(parent) = out_path.parent().filter(|p| !p.as_os_str().is_empty()) {
@@ -226,38 +232,53 @@ fn process(cli: &Cli, input: &Path) -> Result<(), Box<dyn Error>> {
         fs::write(&buffer_path, buf)?;
     }
 
-    if cli.verbose {
-        println!(
-            "{} ({}x{}) -> {} ({}x{}) in {:.0}ms",
-            input.display(),
-            source_size.0,
-            source_size.1,
-            out_path.display(),
-            final_image.width(),
-            final_image.height(),
-            started.elapsed().as_secs_f64() * 1000.0,
+    if !cli.verbose {
+        return Ok(out_path.display().to_string());
+    }
+
+    let mut report = format!(
+        "{} ({}x{}) -> {} ({}x{}) in {:.0}ms",
+        input.display(),
+        source_size.0,
+        source_size.1,
+        out_path.display(),
+        final_image.width(),
+        final_image.height(),
+        started.elapsed().as_secs_f64() * 1000.0,
+    );
+
+    if let Some(buf) = &buffer {
+        let _ = write!(
+            report,
+            "\n  frame buffer: {} ({} bytes)",
+            buffer_path.display(),
+            buf.len()
         );
-    } else {
-        println!("{}", out_path.display());
     }
 
-    if let Some(buf) = &buffer
-        && cli.verbose
-    {
-        println!("  frame buffer: {} ({} bytes)", buffer_path.display(), buf.len());
-    }
-
-    Ok(())
+    Ok(report)
 }
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
 
+    // Decoding dominates the pipeline and is single-threaded per photo, so a batch is fastest with one photo per core.
+    // `map` over an indexed parallel iterator keeps the results in input order, so the output does not depend on which
+    // thread happened to finish first.
+    let reports: Vec<Result<String, String>> = cli
+        .inputs
+        .par_iter()
+        .map(|input| process(&cli, input).map_err(|e| format!("error: {}: {e}", input.display())))
+        .collect();
+
     let mut failed = 0usize;
-    for input in &cli.inputs {
-        if let Err(e) = process(&cli, input) {
-            eprintln!("error: {}: {e}", input.display());
-            failed += 1;
+    for report in &reports {
+        match report {
+            Ok(text) => println!("{text}"),
+            Err(text) => {
+                eprintln!("{text}");
+                failed += 1;
+            },
         }
     }
 
