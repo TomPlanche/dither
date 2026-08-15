@@ -8,7 +8,7 @@
 use axum::extract::{FromRequestParts, Query};
 use axum::http::request::Parts;
 use reframe_dither::{
-    ATKINSON, BURKES, BayerSize, DitherMethod, DitherOptions, FLOYD_STEINBERG, JARVIS_JUDICE_NINKE, STUCKI,
+    ATKINSON, BURKES, BayerSize, DitherMethod, DitherOptions, FLOYD_STEINBERG, FitOptions, JARVIS_JUDICE_NINKE, STUCKI,
 };
 use serde::{Deserialize, Serialize};
 
@@ -88,6 +88,10 @@ pub struct DitherParams {
     pub height: u32,
     /// Resize to `width`x`height` first. False dithers at the source resolution.
     pub resize: bool,
+    /// Keep the photo's orientation: a portrait photo resizes to `height`x`width`.
+    pub keep_orientation: bool,
+    /// Crop to the working size's aspect ratio instead of stretching the photo into it.
+    pub crop: bool,
     /// Nearest-neighbour upscale applied to the result, 1 to 4.
     pub scale: u32,
     pub format: Format,
@@ -106,6 +110,8 @@ impl Default for DitherParams {
             width: reframe_dither::DISPLAY_IMAGE_SIZE.0,
             height: reframe_dither::DISPLAY_IMAGE_SIZE.1,
             resize: true,
+            keep_orientation: false,
+            crop: false,
             scale: 1,
             format: Format::Indexed,
         }
@@ -150,6 +156,14 @@ impl DitherParams {
     /// The working size, or `None` when the source resolution is kept.
     pub fn target_size(self) -> Option<(u32, u32)> {
         self.resize.then_some((self.width, self.height))
+    }
+
+    /// How a photo that does not share the working size's shape is fitted to it.
+    pub fn fit(self) -> FitOptions {
+        FitOptions {
+            keep_orientation: self.keep_orientation,
+            crop: self.crop,
+        }
     }
 }
 
@@ -235,6 +249,33 @@ mod tests {
         for params in bad {
             assert!(params.to_options().is_err(), "{params:?} should be rejected");
         }
+    }
+
+    #[test]
+    fn the_fitting_flags_reach_the_pipeline() {
+        let params = DitherParams::default();
+        assert_eq!(params.target_size(), Some((600, 400)));
+        assert_eq!(params.fit(), FitOptions::default());
+
+        let params = DitherParams {
+            keep_orientation: true,
+            crop: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            params.fit(),
+            FitOptions {
+                keep_orientation: true,
+                crop: true
+            }
+        );
+
+        // `resize=false` drops the working size, and the flags then have nothing to act on.
+        let params = DitherParams {
+            resize: false,
+            ..params
+        };
+        assert_eq!(params.target_size(), None);
     }
 
     #[test]

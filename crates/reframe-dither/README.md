@@ -33,6 +33,20 @@ Ordered dithering with a 2x2 Bayer matrix and softened thresholds:
 reframe-dither photo.jpg -m ordered --bayer-size 2 --threshold-scale 0.5
 ```
 
+A portrait photo, kept portrait rather than squashed into the landscape working size:
+
+```bash
+reframe-dither photo.jpg --keep-orientation
+# a 3456x5184 photo comes out 400x600, the panel's own portrait size
+```
+
+Undistorted whatever the photo's shape, which is the two flags together:
+
+```bash
+reframe-dither photo.jpg --keep-orientation --crop
+# a 3:4 photo comes out 400x600 with the sides trimmed, not stretched to 2:3
+```
+
 Also emit the packed frame buffer, ready to hand to `epd.display()`:
 
 ```bash
@@ -53,6 +67,8 @@ reframe-dither photo.jpg --buffer
 | `--threshold-scale <F>` | `1.0` | Scales the Bayer threshold amplitude. Ordered only |
 | `--size <WxH>` | `600x400` | Working size |
 | `--no-resize` | off | Dither at the source resolution |
+| `--keep-orientation` | off | Resize a portrait photo to the transpose of `--size`, so it stays portrait |
+| `--crop` | off | Crop to `--size`'s aspect ratio instead of stretching the photo into it |
 | `--upscale-2x` | off | Nearest-neighbour doubling, matching the dashboard export |
 | `-f, --format <F>` | `indexed` | `indexed` (palette PNG, as the camera saves) or `rgb` |
 | `--buffer` | off | Also write the packed e-paper frame buffer |
@@ -103,6 +119,17 @@ use reframe_dither::{DitherOptions, dither_to_display_buffer};
 let (buffer, dithered, _orientation) = dither_to_display_buffer(&sized, &DitherOptions::default());
 // `buffer` is 120000 bytes: two 4-bit colour codes per byte, portrait.
 ```
+
+`resize::resize_image` always produces the size you name, stretching the photo into it. `resize::resize_to_fit` takes a `FitOptions` instead: `keep_orientation` transposes the size for a photo of the other orientation, so a portrait photo comes out 400x600 and a landscape one 600x400, and `crop` takes the largest centred rectangle that already has the target's ratio rather than stretching what is left over. Both 600x400 and 400x600 are sizes the panel takes, and `dither_to_display_buffer` reports which one it got through its `Orientation`.
+
+```rust
+use reframe_dither::FitOptions;
+
+let fit = FitOptions { keep_orientation: true, crop: true };
+let sized = resize::resize_to_fit(&photo, resize::DISPLAY_IMAGE_SIZE, fit);
+```
+
+`resize::cover_rect` returns the rectangle `crop` would keep, for a caller that wants to say what a photo will lose before running the pipeline. Nothing is copied to crop: the region is read in place, so cropping costs the same as not cropping.
 
 Inputs are `image::RgbImage`, so anything that crate can decode works, and `RgbImage::from_raw` takes pixels you already have.
 

@@ -204,7 +204,7 @@ fn prepare(source: &[u8], params: DitherParams) -> Result<RgbImage, ApiError> {
     }
 
     Ok(match params.target_size() {
-        Some(size) => resize::resize_image(&photo, size),
+        Some(size) => resize::resize_to_fit(&photo, size, params.fit()),
         None => photo,
     })
 }

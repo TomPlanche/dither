@@ -10,7 +10,8 @@ use clap::builder::TypedValueParser;
 use clap::{Parser, ValueEnum};
 use rayon::prelude::*;
 use reframe_dither::{
-    BayerSize, DitherMethod, DitherOptions, IndexedImage, Orientation, RgbImage, apply_dithering, display, io, resize,
+    BayerSize, DitherMethod, DitherOptions, FitOptions, IndexedImage, Orientation, RgbImage, apply_dithering, display,
+    io, resize,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -101,6 +102,14 @@ struct Cli {
     #[arg(long)]
     no_resize: bool,
 
+    /// Keep the photo's orientation: a portrait photo resizes to the transpose of `--size`.
+    #[arg(long)]
+    keep_orientation: bool,
+
+    /// Crop to `--size`'s aspect ratio instead of stretching the photo into it.
+    #[arg(long)]
+    crop: bool,
+
     /// Double the output with nearest-neighbour, matching the dashboard export.
     #[arg(long)]
     upscale_2x: bool,
@@ -146,6 +155,13 @@ impl Cli {
         }
     }
 
+    fn fit(&self) -> FitOptions {
+        FitOptions {
+            keep_orientation: self.keep_orientation,
+            crop: self.crop,
+        }
+    }
+
     /// Where a given input's dithered PNG should land.
     ///
     /// A single input may name its output file directly; otherwise outputs are
@@ -177,7 +193,7 @@ fn process(cli: &Cli, input: &Path) -> Result<String, Box<dyn Error>> {
     let working: RgbImage = if cli.no_resize {
         photo
     } else {
-        resize::resize_image(&photo, cli.size)
+        resize::resize_to_fit(&photo, cli.size, cli.fit())
     };
 
     let options = cli.dither_options();

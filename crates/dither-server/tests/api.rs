@@ -9,9 +9,31 @@ use dither_server::{Config, router};
 use reframe_dither::{DISPLAY_PANEL_SIZE, RgbImage, io};
 use tower::ServiceExt;
 
-/// A small PNG with enough colour variation to exercise the dither.
+/// A small landscape PNG with enough colour variation to exercise the dither.
 fn source_png() -> Vec<u8> {
-    let (width, height) = (120u32, 90u32);
+    sized_png(120, 90)
+}
+
+/// A 3:1 image, black but for a white band down the middle third.
+///
+/// Both colours survive the dither exactly, so what comes back says which part of the source was kept.
+fn banded_png() -> Vec<u8> {
+    let (width, height) = (120u32, 40u32);
+    let mut pixels = Vec::with_capacity((width * height * 3) as usize);
+    for _ in 0..height {
+        for x in 0..width {
+            let band = (width / 3..2 * width / 3).contains(&x);
+            let v = if band { 255u8 } else { 0 };
+            pixels.extend_from_slice(&[v, v, v]);
+        }
+    }
+
+    let image = RgbImage::from_raw(width, height, pixels).expect("the buffer matches the size");
+    io::encode_rgb_png(&image).expect("the test image encodes")
+}
+
+/// The same image at an arbitrary size, for the orientation tests.
+fn sized_png(width: u32, height: u32) -> Vec<u8> {
     let mut pixels = Vec::with_capacity((width * height * 3) as usize);
     for y in 0..height {
         for x in 0..width {
@@ -125,6 +147,66 @@ async fn a_multipart_image_field_is_accepted() {
 
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(response.headers()["x-image-size"], "600x400");
+}
+
+#[tokio::test]
+async fn keep_orientation_transposes_the_working_size_for_a_portrait_upload() {
+    let response = call(post(
+        "/api/dither?keep_orientation=true",
+        "image/png",
+        sized_png(90, 120),
+    ))
+    .await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["x-image-size"], "400x600");
+
+    // A landscape upload is unaffected.
+    let response = call(post("/api/dither?keep_orientation=true", "image/png", source_png())).await;
+    assert_eq!(response.headers()["x-image-size"], "600x400");
+
+    // And without the flag a portrait upload is still squashed into the landscape size.
+    let response = call(post("/api/dither", "image/png", sized_png(90, 120))).await;
+    assert_eq!(response.headers()["x-image-size"], "600x400");
+}
+
+#[tokio::test]
+async fn crop_keeps_the_middle_of_a_photo_the_working_size_does_not_fit() {
+    let uri = "/api/dither?width=40&height=40&crop=true";
+    let response = call(post(uri, "image/png", banded_png())).await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["x-image-size"], "40x40");
+
+    // The 3:1 source is cropped to the square middle, which is the white band alone.
+    let cropped = io::decode_rgb(&body_bytes(response).await).expect("the result decodes");
+    assert!(
+        cropped.pixels().all(|p| p.0.iter().all(|&c| c > 200)),
+        "the crop should hold the white band only, got {:?}",
+        cropped.get_pixel(0, 0)
+    );
+
+    // Without it the source is squashed into the square, black edges and all.
+    let response = call(post("/api/dither?width=40&height=40", "image/png", banded_png())).await;
+    let squashed = io::decode_rgb(&body_bytes(response).await).expect("the result decodes");
+    assert!(squashed.pixels().any(|p| p.0.iter().all(|&c| c < 100)));
+}
+
+#[tokio::test]
+async fn a_portrait_upload_reaches_the_panel_without_a_rotation() {
+    let response = call(post(
+        "/api/buffer?keep_orientation=true",
+        "image/png",
+        sized_png(90, 120),
+    ))
+    .await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["x-panel-orientation"], "panel");
+    assert_eq!(response.headers()["x-image-size"], "400x600");
+
+    let expected = (DISPLAY_PANEL_SIZE.0 * DISPLAY_PANEL_SIZE.1) as usize / 2;
+    assert_eq!(body_bytes(response).await.len(), expected);
 }
 
 #[tokio::test]

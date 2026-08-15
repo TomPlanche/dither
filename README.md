@@ -45,7 +45,7 @@ Defaults, accepted values, limits and the panel palette. The `defaults` object u
   "methods": ["floyd-steinberg", "atkinson", "stucki", "burkes", "jarvis", "ordered"],
   "formats": ["indexed", "rgb"],
   "bayer_sizes": [2, 4, 8],
-  "defaults": { "method": "floyd-steinberg", "saturation": 0.6, "brightness": 1.1, "color": 1.4, "bayer_size": 4, "threshold_scale": 1.0, "width": 600, "height": 400, "resize": true, "scale": 1, "format": "indexed" },
+  "defaults": { "method": "floyd-steinberg", "saturation": 0.6, "brightness": 1.1, "color": 1.4, "bayer_size": 4, "threshold_scale": 1.0, "width": 600, "height": 400, "resize": true, "keep_orientation": false, "crop": false, "scale": 1, "format": "indexed" },
   "limits": { "max_upload_bytes": 26214400, "max_dimension": 4096, "max_scale": 4, "max_source_pixels": 50000000 },
   "panel": { "image_size": [600, 400], "panel_size": [400, 600], "palette": ["#221c22", "#ffffff", "#e2d82a", "#c32b2d", "#221c22", "#004cff", "#189c22"] }
 }
@@ -62,6 +62,8 @@ Returns the dithered image as `image/png`, with an `x-image-size` header carryin
 Returns the packed frame buffer as `application/octet-stream`: two 4-bit colour codes per byte, 120000 bytes for the 400x600 panel. The `x-panel-orientation` header says whether the image was already portrait (`panel`) or had to be turned a quarter turn (`rotated`).
 
 The panel accepts one layout only, so a request that dithers to something other than 600x400 or 400x600 is refused with a 400. `format` and `scale` do not apply here and are ignored.
+
+With `keep_orientation=true` a portrait upload resizes straight to the panel's own 400x600, so it reports `panel` and reaches the hardware without a quarter turn.
 
 ### Sending the image
 
@@ -85,10 +87,14 @@ Settings ride in the query string on both POST routes. Every one is optional.
 | `width` | `600` | `1` to `4096` |
 | `height` | `400` | `1` to `4096` |
 | `resize` | `true` | `false` dithers at the source resolution instead. |
+| `keep_orientation` | `false` | `true` transposes `width`x`height` for a photo that disagrees with it, so a portrait upload stays portrait. |
+| `crop` | `false` | `true` crops to `width`x`height`'s aspect ratio instead of stretching the photo into it. |
 | `scale` | `1` | `1` to `4`. Nearest-neighbour upscale of the result. |
 | `format` | `indexed` | `indexed` for a palette PNG, `rgb` for a plain one. |
 
 An unknown parameter is an error rather than a silent no-op, so a typo shows up immediately.
+
+`keep_orientation` and `crop` are what an upload of any shape needs to come out undistorted: the first picks the panel layout the photo is closer to, the second trims the long side rather than stretching the short one. Neither changes the size that comes back, so a client can keep reading it off `x-image-size`.
 
 ### Errors
 
@@ -125,6 +131,8 @@ export type DitherParams = {
   width: number;
   height: number;
   resize: boolean;
+  keep_orientation: boolean;
+  crop: boolean;
   scale: number;
   format: 'indexed' | 'rgb';
 };

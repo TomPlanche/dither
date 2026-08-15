@@ -7,6 +7,8 @@
 //! # Pipeline
 //!
 //! 1. Resize to the panel's 600x400 landscape working size ([`resize`]).
+//!    [`FitOptions`] can keep a portrait photo in the 400x600 transpose
+//!    instead, and crop rather than stretch whatever ratio is left over.
 //! 2. Boost brightness, then colour ([`enhance`]).
 //! 3. Dither to the 7-slot panel palette ([`dither`]).
 //! 4. Rotate to portrait and pack two 4-bit codes per byte ([`display`]).
@@ -47,7 +49,9 @@ pub use diffusion::{ATKINSON, BURKES, FLOYD_STEINBERG, JARVIS_JUDICE_NINKE, KERN
 pub use display::{DISPLAY_PANEL_SIZE, Orientation, dither_to_display_buffer, img2buffer};
 pub use dither::{DitherMethod, DitherOptions, OrderedLut, apply_dithering};
 pub use panel::PanelPalette;
-pub use resize::{DISPLAY_IMAGE_SIZE, resize_image};
+pub use resize::{
+    DISPLAY_IMAGE_SIZE, FitOptions, cover_rect, orient_target, resize_cropped, resize_image, resize_to_fit,
+};
 
 /// Re-exported so callers can build inputs without depending on `image` directly.
 pub use image::RgbImage;

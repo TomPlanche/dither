@@ -7,7 +7,37 @@ use rayon::prelude::*;
 /// The landscape size the pipeline dithers at.
 pub const DISPLAY_IMAGE_SIZE: (u32, u32) = (600, 400);
 
-/// Scales a photo to the working size.
+/// How a photo that does not share the working size's shape is made to fit it.
+///
+/// Both are off by default, which is the camera's own behaviour: the photo is stretched into the landscape working size
+/// whatever shape it arrived in.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FitOptions {
+    /// Transpose the working size for a photo of the other orientation, so a portrait photo stays portrait.
+    pub keep_orientation: bool,
+    /// Crop to the working size's aspect ratio rather than stretching the photo into it.
+    pub crop: bool,
+}
+
+/// Scales a photo to the working size, fitted the way `fit` asks for.
+///
+/// Turning both flags on is what keeps a photo of any shape undistorted: the target follows the photo's orientation,
+/// and whatever ratio is left over comes off the long side as a centred crop.
+pub fn resize_to_fit(image: &RgbImage, target: (u32, u32), fit: FitOptions) -> RgbImage {
+    let target = if fit.keep_orientation {
+        orient_target(image.dimensions(), target)
+    } else {
+        target
+    };
+
+    if fit.crop {
+        resize_cropped(image, target)
+    } else {
+        resize_image(image, target)
+    }
+}
+
+/// Scales a photo to the working size, stretching it when the two shapes disagree.
 ///
 /// A triangle filter widens its kernel when downscaling, so it behaves like an area average rather than point sampling.
 /// Run alone on a 45 MP photo that costs more than the rest of the pipeline put together, because the kernel then spans
@@ -18,14 +48,69 @@ pub const DISPLAY_IMAGE_SIZE: (u32, u32) = (600, 400);
 /// stays within about one 8-bit level of the single-pass version, and Pillow reduces the same way behind
 /// `reducing_gap`.
 pub fn resize_image(image: &RgbImage, target: (u32, u32)) -> RgbImage {
-    if image.dimensions() == target {
+    resize_region(image, (0, 0, image.width(), image.height()), target)
+}
+
+/// Scales the largest centred part of a photo that already has the target's aspect ratio.
+///
+/// Nothing is distorted, and what it costs instead is the edges: a 3:2 photo against the 2:3 panel keeps the middle
+/// third or so of its width. The crop is never materialised, so this reads the source once, the same as a plain resize.
+pub fn resize_cropped(image: &RgbImage, target: (u32, u32)) -> RgbImage {
+    resize_region(image, cover_rect(image.dimensions(), target), target)
+}
+
+/// `target`, transposed when it and `source` disagree on orientation.
+///
+/// A square source counts as landscape, so a square photo against a landscape target is left alone.
+pub fn orient_target(source: (u32, u32), target: (u32, u32)) -> (u32, u32) {
+    if (source.1 > source.0) == (target.1 > target.0) {
+        target
+    } else {
+        (target.1, target.0)
+    }
+}
+
+/// The largest centred rectangle of `source` that has `target`'s aspect ratio, as `(x, y, width, height)`.
+///
+/// The comparison is `sw * th` against `tw * sh` rather than a pair of divisions, so the ratios are exact and a photo
+/// that already matches the target keeps every pixel.
+pub fn cover_rect(source: (u32, u32), target: (u32, u32)) -> (u32, u32, u32, u32) {
+    let (sw, sh) = source;
+    let (tw, th) = target;
+    if tw == 0 || th == 0 {
+        return (0, 0, sw, sh);
+    }
+
+    let (sw64, sh64) = (u64::from(sw), u64::from(sh));
+    let (tw64, th64) = (u64::from(tw), u64::from(th));
+
+    if sw64 * th64 > tw64 * sh64 {
+        // The photo is the wider of the two, so the sides come off. Rounding down keeps the crop inside the photo.
+        let width = ((sh64 * tw64 / th64) as u32).clamp(1, sw);
+        ((sw - width) / 2, 0, width, sh)
+    } else {
+        let height = ((sw64 * th64 / tw64) as u32).clamp(1, sh);
+        (0, (sh - height) / 2, sw, height)
+    }
+}
+
+/// Scales the `(x, y, width, height)` region of a photo to `target`.
+fn resize_region(image: &RgbImage, rect: (u32, u32, u32, u32), target: (u32, u32)) -> RgbImage {
+    let (x, y, width, height) = rect;
+    if (width, height) == target && rect == (0, 0, image.width(), image.height()) {
         return image.clone();
     }
 
-    match prefilter_factor(image.dimensions(), target) {
-        1 => imageops::resize(image, target.0, target.1, FilterType::Triangle),
+    match prefilter_factor((width, height), target) {
+        // A crop view costs an offset per pixel, and this arm only ever runs on a photo under twice the target.
+        1 => imageops::resize(
+            &*imageops::crop_imm(image, x, y, width, height),
+            target.0,
+            target.1,
+            FilterType::Triangle,
+        ),
         factor => {
-            let reduced = box_reduce(image, factor);
+            let reduced = box_reduce(image, rect, factor);
             imageops::resize(&reduced, target.0, target.1, FilterType::Triangle)
         },
     }
@@ -42,15 +127,20 @@ fn prefilter_factor(source: (u32, u32), target: (u32, u32)) -> u32 {
     (w / tw).min(h / th).max(1)
 }
 
-/// Averages whole `factor` x `factor` blocks of pixels.
+/// Averages whole `factor` x `factor` blocks of the `(x, y, width, height)` region.
 ///
 /// The last few source rows and columns are dropped when the side is not a multiple of `factor`. That is at most
 /// `factor - 1` pixels off an edge that is thousands wide, and it keeps every block the same weight.
-fn box_reduce(image: &RgbImage, factor: u32) -> RgbImage {
+///
+/// The region is read in place. A crop is only ever an offset and a shorter row here, so it never costs the copy that
+/// materialising the sub-image would.
+fn box_reduce(image: &RgbImage, rect: (u32, u32, u32, u32), factor: u32) -> RgbImage {
+    let (x0, y0, width, height) = rect;
     let f = factor as usize;
-    let out_w = (image.width() as usize) / f;
-    let out_h = (image.height() as usize) / f;
+    let out_w = (width as usize) / f;
+    let out_h = (height as usize) / f;
     let src_stride = (image.width() as usize) * 3;
+    let origin = (y0 as usize) * src_stride + (x0 as usize) * 3;
     let src = image.as_raw();
 
     // Round to nearest rather than truncating, which halves the drift.
@@ -60,7 +150,7 @@ fn box_reduce(image: &RgbImage, factor: u32) -> RgbImage {
     // Output rows are independent, and each reads a disjoint band of the source.
     let mut out = vec![0u8; out_w * out_h * 3];
     out.par_chunks_mut(out_w * 3).enumerate().for_each(|(y, row)| {
-        let block_top = y * f * src_stride;
+        let block_top = origin + y * f * src_stride;
         for (x, cell) in row.chunks_exact_mut(3).enumerate() {
             let block_left = x * f * 3;
             let mut acc = [0u32; 3];
@@ -136,7 +226,7 @@ mod tests {
             let v = if x < 2 { 0 } else { 200 };
             image::Rgb([v, v, v])
         });
-        let reduced = box_reduce(&image, 2);
+        let reduced = box_reduce(&image, (0, 0, 4, 2), 2);
         assert_eq!(reduced.dimensions(), (2, 1));
         assert_eq!(reduced.get_pixel(0, 0).0, [0, 0, 0]);
         assert_eq!(reduced.get_pixel(1, 0).0, [200, 200, 200]);
@@ -158,6 +248,116 @@ mod tests {
             .max()
             .unwrap();
         assert!(worst <= 2, "two-step resize drifted by {worst} levels");
+    }
+
+    #[test]
+    fn orienting_only_transposes_a_target_that_disagrees() {
+        // Portrait photo, landscape target: transposed.
+        assert_eq!(orient_target((3456, 5184), DISPLAY_IMAGE_SIZE), (400, 600));
+        // Landscape photo, landscape target: left alone.
+        assert_eq!(orient_target((5184, 3456), DISPLAY_IMAGE_SIZE), DISPLAY_IMAGE_SIZE);
+        // And the same against a portrait target.
+        assert_eq!(orient_target((3456, 5184), (400, 600)), (400, 600));
+        assert_eq!(orient_target((5184, 3456), (400, 600)), DISPLAY_IMAGE_SIZE);
+        // A square photo counts as landscape.
+        assert_eq!(orient_target((1000, 1000), DISPLAY_IMAGE_SIZE), DISPLAY_IMAGE_SIZE);
+    }
+
+    #[test]
+    fn a_portrait_photo_stays_portrait() {
+        let keep = FitOptions {
+            keep_orientation: true,
+            ..Default::default()
+        };
+
+        let portrait = RgbImage::new(1200, 1800);
+        assert_eq!(
+            resize_to_fit(&portrait, DISPLAY_IMAGE_SIZE, keep).dimensions(),
+            (400, 600)
+        );
+
+        let landscape = RgbImage::new(1800, 1200);
+        assert_eq!(
+            resize_to_fit(&landscape, DISPLAY_IMAGE_SIZE, keep).dimensions(),
+            DISPLAY_IMAGE_SIZE
+        );
+
+        // The default is the camera's: whatever the photo, the size it was asked for.
+        assert_eq!(
+            resize_to_fit(&portrait, DISPLAY_IMAGE_SIZE, FitOptions::default()).dimensions(),
+            DISPLAY_IMAGE_SIZE
+        );
+    }
+
+    #[test]
+    fn the_cover_rect_is_centred_and_matches_the_target_ratio() {
+        // A 2:3 photo against the 3:2 working size: the height comes off.
+        assert_eq!(cover_rect((3456, 5184), DISPLAY_IMAGE_SIZE), (0, 1440, 3456, 2304));
+        // A 3:2 photo against the 2:3 panel: the width comes off.
+        assert_eq!(cover_rect((5184, 3456), (400, 600)), (1440, 0, 2304, 3456));
+        // A photo that already matches keeps every pixel.
+        assert_eq!(cover_rect((1200, 800), DISPLAY_IMAGE_SIZE), (0, 0, 1200, 800));
+
+        // Whatever the pair, the kept rectangle is inside the photo and holds the target's ratio to within a pixel.
+        for source in [(3456, 5184), (8256, 5504), (1000, 1000), (1201, 801), (37, 4000)] {
+            for target in [DISPLAY_IMAGE_SIZE, (400, 600), (100, 100)] {
+                let (x, y, w, h) = cover_rect(source, target);
+                assert!(
+                    x + w <= source.0 && y + h <= source.1,
+                    "{source:?} -> {target:?} escapes"
+                );
+                let drift = (u64::from(w) * u64::from(target.1)).abs_diff(u64::from(h) * u64::from(target.0));
+                assert!(
+                    drift <= u64::from(target.0).max(u64::from(target.1)),
+                    "{source:?} -> {target:?} kept {w}x{h}, off ratio"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn cropping_keeps_the_middle_and_drops_the_edges() {
+        // Red sides, a green band down the middle third.
+        let banded = |width: u32, height: u32| {
+            RgbImage::from_fn(width, height, |x, _| {
+                if (width / 3..2 * width / 3).contains(&x) {
+                    image::Rgb([0, 255, 0])
+                } else {
+                    image::Rgb([255, 0, 0])
+                }
+            })
+        };
+
+        // Straight through the triangle filter, and through the box prefilter as well.
+        for (width, target) in [(120u32, (40u32, 40u32)), (1200, (100, 100))] {
+            let image = banded(width, width / 3);
+            let cropped = resize_cropped(&image, target);
+            assert_eq!(cropped.dimensions(), target);
+            assert!(
+                cropped.pixels().all(|p| p.0 == [0, 255, 0]),
+                "{width}px: the crop should hold the green band only, got {:?}",
+                cropped.get_pixel(0, 0)
+            );
+
+            // Stretching instead keeps the red edges, which is the behaviour being opted out of.
+            assert!(resize_image(&image, target).pixels().any(|p| p.0[0] > 128));
+        }
+    }
+
+    #[test]
+    fn cropping_and_orientation_together_leave_a_photo_undistorted() {
+        // A 3:4 portrait photo: the transpose alone would still stretch it to 2:3.
+        let photo = RgbImage::from_fn(1200, 1600, |x, y| image::Rgb([(x / 8) as u8, (y / 8) as u8, 60]));
+        let fit = FitOptions {
+            keep_orientation: true,
+            crop: true,
+        };
+
+        let out = resize_to_fit(&photo, DISPLAY_IMAGE_SIZE, fit);
+        assert_eq!(out.dimensions(), (400, 600));
+
+        // 3:4 is taller than the 2:3 it is going into, so the crop comes off the width.
+        assert_eq!(cover_rect(photo.dimensions(), (400, 600)), (67, 0, 1066, 1600));
     }
 
     #[test]
