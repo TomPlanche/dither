@@ -1,0 +1,32 @@
+[package]
+name = "reframe-dither"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Rust port of the reframe 6-colour e-paper dithering pipeline"
+readme = "README.md"
+
+[lib]
+name = "reframe_dither"
+path = "src/lib.rs"
+
+[[bin]]
+name = "reframe-dither"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[features]
+default = ["cli"]
+# Image decoding and palette PNG encoding.
+image-io = ["dep:png", "image/jpeg", "image/png"]
+# The command line front end.
+cli = ["image-io", "dep:clap"]
+
+[dependencies]
+# Buffers, resampling, Floyd-Steinberg error diffusion and colour indexing.
+image = { version = "0.25", default-features = false }
+# CIELAB colour science behind the nearest-colour search.
+palette = { version = "0.7.7", default-features = false, features = ["std"] }
+# Palette PNG output, which `image` cannot write.
+png = { version = "0.18", optional = true }
+clap = { version = "4", features = ["derive"], optional = true }

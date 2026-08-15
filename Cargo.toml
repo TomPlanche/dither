@@ -1,0 +1,23 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[workspace.dependencies]
+reframe-dither = { path = "crates/reframe-dither", default-features = false }
+
+axum = "0.8"
+tokio = "1"
+tower-http = "0.7"
+serde = "1"
+serde_json = "1"
+tower = "0.5"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+[profile.release]
+opt-level = 3
