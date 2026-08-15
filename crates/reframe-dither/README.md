@@ -47,6 +47,13 @@ reframe-dither photo.jpg --keep-orientation --crop
 # a 3:4 photo comes out 400x600 with the sides trimmed, not stretched to 2:3
 ```
 
+Keeping a different part than the middle:
+
+```bash
+reframe-dither photo.jpg --crop --crop-from top
+reframe-dither photo.jpg --crop --crop-from 0,3800   # the rectangle's top-left corner, in source pixels
+```
+
 A size a platform expects, rather than the panel's:
 
 ```bash
@@ -77,6 +84,7 @@ reframe-dither photo.jpg --buffer
 | `--no-resize` | off | Dither at the source resolution |
 | `--keep-orientation` | off | Resize a portrait photo to the transpose of `--size`, so it stays portrait |
 | `--crop` | off | Crop to `--size`'s aspect ratio instead of stretching the photo into it |
+| `--crop-from <WHERE>` | `center` | Which part the crop keeps: `center`, `top`, `bottom`, `left`, `right`, or a corner as `X,Y`. Needs `--crop` |
 | `--upscale-2x` | off | Nearest-neighbour doubling, matching the dashboard export |
 | `-f, --format <F>` | `indexed` | `indexed` (palette PNG, as the camera saves) or `rgb` |
 | `--buffer` | off | Also write the packed e-paper frame buffer |
@@ -149,9 +157,11 @@ let (buffer, dithered, _orientation) = dither_to_display_buffer(&sized, &DitherO
 ```rust
 use reframe_dither::FitOptions;
 
-let fit = FitOptions { keep_orientation: true, crop: true };
+let fit = FitOptions { keep_orientation: true, crop: true, ..Default::default() };
 let sized = resize::resize_to_fit(&photo, resize::DISPLAY_IMAGE_SIZE, fit);
 ```
+
+Which part the crop keeps is `FitOptions::crop_from`, a `CropOrigin`: `Center` by default, `Top`, `Bottom`, `Left`, `Right`, or `At { x, y }` for the rectangle's top-left corner in source pixels. The rectangle's size is fixed by the target's ratio, so only where it sits is free, and only along the one axis that has any slack: `Top` on a photo losing its sides behaves like `Center`. An `At` past the end settles against the far edge rather than failing, since how much slack there is depends on the photo's own size. `CropOrigin` parses and prints the same spelling the CLI and the HTTP API use.
 
 `resize::cover_rect` returns the rectangle `crop` would keep, for a caller that wants to say what a photo will lose before running the pipeline. Nothing is copied to crop: the region is read in place, so cropping costs the same as not cropping.
 

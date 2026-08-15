@@ -91,12 +91,17 @@ Settings ride in the query string on both POST routes. Every one is optional.
 | `resize` | `true` | `false` dithers at the source resolution instead. |
 | `keep_orientation` | `false` | `true` transposes `width`x`height` for a photo that disagrees with it, so a portrait upload stays portrait. |
 | `crop` | `false` | `true` crops to `width`x`height`'s aspect ratio instead of stretching the photo into it. |
+| `crop_from` | `center` | Which part the crop keeps: `center`, `top`, `bottom`, `left`, `right`, or a corner as `X,Y`. Needs `crop=true`. |
 | `scale` | `1` | `1` to `4`. Nearest-neighbour upscale of the result. |
 | `format` | `indexed` | `indexed` for a palette PNG, `rgb` for a plain one. |
 
 An unknown parameter is an error rather than a silent no-op, so a typo shows up immediately.
 
 `keep_orientation` and `crop` are what an upload of any shape needs to come out undistorted: the first picks the panel layout the photo is closer to, the second trims the long side rather than stretching the short one. Neither changes the size that comes back, so a client can keep reading it off `x-image-size`.
+
+`crop_from` says which part the crop keeps. The kept rectangle's size is fixed by the working size's ratio, so what is left to choose is where it sits, and only along the one axis that has any slack: `top` on a photo that is losing its sides does the same as `center`. A corner past what the photo can offer settles against the far edge rather than failing, because how much slack there is depends on the upload's own dimensions, which the caller does not always know.
+
+Two spellings are a 400 rather than a silent centre crop: one that is neither an anchor nor `X,Y`, and `crop_from` without `crop=true`, which would have nothing to place. That is why `crop_from` is absent from `defaults` when unset, so posting the reported defaults back unchanged stays a valid request.
 
 ### Presets
 
@@ -161,6 +166,8 @@ export type DitherParams = {
   resize: boolean;
   keep_orientation: boolean;
   crop: boolean;
+  /** Needs `crop: true`. 'center' | 'top' | 'bottom' | 'left' | 'right', or a corner as `${number},${number}` */
+  crop_from: string;
   scale: number;
   format: 'indexed' | 'rgb';
 };

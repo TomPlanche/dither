@@ -10,8 +10,8 @@ use clap::builder::TypedValueParser;
 use clap::{Parser, ValueEnum};
 use rayon::prelude::*;
 use reframe_dither::{
-    BayerSize, DitherMethod, DitherOptions, FitOptions, IndexedImage, Orientation, RgbImage, apply_dithering, display,
-    io, resize,
+    BayerSize, CropOrigin, DitherMethod, DitherOptions, FitOptions, IndexedImage, Orientation, RgbImage,
+    apply_dithering, display, io, resize,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -120,6 +120,10 @@ struct Cli {
     #[arg(long)]
     crop: bool,
 
+    /// Which part the crop keeps: center, top, bottom, left, right, or a corner as X,Y.
+    #[arg(long, requires = "crop", default_value = "center", value_name = "WHERE")]
+    crop_from: CropOrigin,
+
     /// Double the output with nearest-neighbour, matching the dashboard export.
     #[arg(long)]
     upscale_2x: bool,
@@ -174,6 +178,7 @@ impl Cli {
         FitOptions {
             keep_orientation: self.keep_orientation,
             crop: self.crop,
+            crop_from: self.crop_from,
         }
     }
 

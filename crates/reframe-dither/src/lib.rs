@@ -50,8 +50,8 @@ pub use display::{DISPLAY_PANEL_SIZE, Orientation, dither_to_display_buffer, img
 pub use dither::{DitherMethod, DitherOptions, OrderedLut, apply_dithering};
 pub use panel::PanelPalette;
 pub use resize::{
-    DISPLAY_IMAGE_SIZE, FitOptions, SIZE_PRESETS, cover_rect, orient_target, preset_names, preset_size, resize_cropped,
-    resize_image, resize_to_fit,
+    CropOrigin, DISPLAY_IMAGE_SIZE, FitOptions, SIZE_PRESETS, cover_rect, orient_target, preset_names, preset_size,
+    resize_cropped, resize_image, resize_to_fit,
 };
 
 /// Re-exported so callers can build inputs without depending on `image` directly.

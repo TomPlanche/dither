@@ -261,6 +261,55 @@ async fn crop_keeps_the_middle_of_a_photo_the_working_size_does_not_fit() {
 }
 
 #[tokio::test]
+async fn crop_from_chooses_which_part_is_kept() {
+    // The band sits in the middle, so anything taken from an edge is the black surround instead.
+    for origin in ["left", "right", "0,0", "80,0"] {
+        let uri = format!("/api/dither?width=40&height=40&crop=true&crop_from={origin}");
+        let response = call(post(&uri, "image/png", banded_png())).await;
+
+        assert_eq!(response.status(), StatusCode::OK, "{origin} should be accepted");
+        let cropped = io::decode_rgb(&body_bytes(response).await).expect("the result decodes");
+        assert!(
+            cropped.pixels().all(|p| p.0.iter().all(|&c| c < 100)),
+            "from {origin}: expected the black edge, got {:?}",
+            cropped.get_pixel(0, 0)
+        );
+    }
+
+    // A corner past what the photo can offer settles against the far edge rather than failing.
+    let uri = "/api/dither?width=40&height=40&crop=true&crop_from=99999,99999";
+    let response = call(post(uri, "image/png", banded_png())).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let clamped = io::decode_rgb(&body_bytes(response).await).expect("the result decodes");
+    assert!(clamped.pixels().all(|p| p.0.iter().all(|&c| c < 100)));
+
+    // And a name that means nothing is a 400 rather than a silent centre crop.
+    let uri = "/api/dither?width=40&height=40&crop=true&crop_from=middle";
+    let response = call(post(uri, "image/png", banded_png())).await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let json: serde_json::Value = serde_json::from_slice(&body_bytes(response).await).expect("the error is JSON");
+    let error = json["error"].as_str().expect("error is a string");
+    assert!(error.contains("X,Y"), "the message should give the syntax: {error}");
+}
+
+#[tokio::test]
+async fn crop_from_without_crop_is_refused_rather_than_ignored() {
+    let response = call(post("/api/dither?crop_from=top", "image/png", source_png())).await;
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let json: serde_json::Value = serde_json::from_slice(&body_bytes(response).await).expect("the error is JSON");
+    let error = json["error"].as_str().expect("error is a string");
+    assert!(
+        error.contains("crop=true"),
+        "the message should say what is missing: {error}"
+    );
+
+    // Adding the crop is all it takes.
+    let response = call(post("/api/dither?crop_from=top&crop=true", "image/png", source_png())).await;
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
 async fn a_portrait_upload_reaches_the_panel_without_a_rotation() {
     let response = call(post(
         "/api/buffer?keep_orientation=true",

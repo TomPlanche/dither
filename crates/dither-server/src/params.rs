@@ -8,7 +8,8 @@
 use axum::extract::{FromRequestParts, Query};
 use axum::http::request::Parts;
 use reframe_dither::{
-    ATKINSON, BURKES, BayerSize, DitherMethod, DitherOptions, FLOYD_STEINBERG, FitOptions, JARVIS_JUDICE_NINKE, STUCKI,
+    ATKINSON, BURKES, BayerSize, CropOrigin, DitherMethod, DitherOptions, FLOYD_STEINBERG, FitOptions,
+    JARVIS_JUDICE_NINKE, STUCKI,
 };
 use serde::{Deserialize, Serialize};
 
@@ -143,6 +144,12 @@ pub struct DitherParams {
     pub keep_orientation: bool,
     /// Crop to the working size's aspect ratio instead of stretching the photo into it.
     pub crop: bool,
+    /// Which part the crop keeps: `center`, `top`, `bottom`, `left`, `right`, or a corner as `X,Y`.
+    ///
+    /// Refused without `crop`, since there would be nothing for it to place. Left out of `GET /api/options` when
+    /// unset, for the same reason: sending the defaults back unchanged has to stay a valid request.
+    #[serde(default, with = "crop_from", skip_serializing_if = "Option::is_none")]
+    pub crop_from: Option<CropOrigin>,
     /// Nearest-neighbour upscale applied to the result, 1 to 4.
     pub scale: u32,
     pub format: Format,
@@ -164,6 +171,7 @@ impl Default for DitherParams {
             resize: true,
             keep_orientation: false,
             crop: false,
+            crop_from: None,
             scale: 1,
             format: Format::Indexed,
         }
@@ -187,6 +195,13 @@ impl DitherParams {
 
         dimension("width", self.width)?;
         dimension("height", self.height)?;
+
+        // A setting that cannot take effect is a mistake worth naming, the way an unknown parameter is.
+        if self.crop_from.is_some() && !self.crop {
+            return Err(ApiError::bad_request(
+                "crop_from needs crop=true, which is what places the rectangle it picks",
+            ));
+        }
 
         if self.scale == 0 || self.scale > MAX_SCALE {
             return Err(ApiError::bad_request(format!(
@@ -220,7 +235,32 @@ impl DitherParams {
         FitOptions {
             keep_orientation: self.keep_orientation,
             crop: self.crop,
+            crop_from: self.crop_from.unwrap_or_default(),
         }
+    }
+}
+
+/// `crop_from` as the one string the pipeline already parses.
+///
+/// The pipeline owns the syntax, so the query string, the CLI and `GET /api/options` all read and write the same
+/// spelling, and an unusable one comes back as a 400 carrying the parser's own message.
+mod crop_from {
+    use std::str::FromStr;
+
+    use reframe_dither::CropOrigin;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(origin: &Option<CropOrigin>, serializer: S) -> Result<S::Ok, S::Error> {
+        match origin {
+            Some(origin) => serializer.collect_str(origin),
+            None => serializer.serialize_none(),
+        }
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<CropOrigin>, D::Error> {
+        Option::<String>::deserialize(deserializer)?
+            .map(|raw| CropOrigin::from_str(&raw).map_err(serde::de::Error::custom))
+            .transpose()
     }
 }
 
@@ -356,15 +396,24 @@ mod tests {
         let params = DitherParams {
             keep_orientation: true,
             crop: true,
+            crop_from: Some(CropOrigin::At { x: 40, y: 90 }),
             ..Default::default()
         };
         assert_eq!(
             params.fit(),
             FitOptions {
                 keep_orientation: true,
-                crop: true
+                crop: true,
+                crop_from: CropOrigin::At { x: 40, y: 90 },
             }
         );
+
+        // Unset, the crop falls back to the middle rather than to nothing.
+        let params = DitherParams {
+            crop_from: None,
+            ..params
+        };
+        assert_eq!(params.fit().crop_from, CropOrigin::Center);
 
         // `resize=false` drops the working size, and the flags then have nothing to act on.
         let params = DitherParams {
@@ -372,6 +421,55 @@ mod tests {
             ..params
         };
         assert_eq!(params.working_size(), None);
+    }
+
+    #[test]
+    fn crop_from_survives_the_query_string_in_both_forms() {
+        for origin in [
+            CropOrigin::Center,
+            CropOrigin::Top,
+            CropOrigin::Bottom,
+            CropOrigin::Left,
+            CropOrigin::Right,
+            CropOrigin::At { x: 120, y: 340 },
+        ] {
+            let params = DitherParams {
+                crop: true,
+                crop_from: Some(origin),
+                ..Default::default()
+            };
+
+            // What `GET /api/options` reports is what the endpoints read back.
+            let json = serde_json::to_value(params).expect("params serialise");
+            assert_eq!(json["crop_from"], origin.to_string());
+            let parsed: DitherParams = serde_json::from_value(json).expect("params parse back");
+            assert_eq!(parsed.crop_from, Some(origin));
+            assert!(parsed.to_options().is_ok(), "{origin} should be accepted with crop");
+        }
+
+        // Unset, it stays out of the reported defaults, so posting them back unchanged is still a valid request.
+        let defaults = serde_json::to_value(DitherParams::default()).expect("defaults serialise");
+        assert!(defaults.get("crop_from").is_none(), "{defaults}");
+
+        // An unusable spelling is refused rather than falling back to the centre.
+        let bad = serde_json::json!({ "crop_from": "middle" });
+        let error = serde_json::from_value::<DitherParams>(bad).expect_err("`middle` should be refused");
+        assert!(error.to_string().contains("center"), "{error}");
+    }
+
+    #[test]
+    fn crop_from_without_crop_is_refused_rather_than_ignored() {
+        let params = DitherParams {
+            crop: false,
+            crop_from: Some(CropOrigin::Top),
+            ..Default::default()
+        };
+        // What the message says is checked over HTTP, where a client would read it.
+        assert!(params.to_options().is_err(), "crop_from alone should be refused");
+
+        // The same origin with the crop on is fine, and so is neither.
+        assert!(DitherParams { crop: true, ..params }.to_options().is_ok());
+        assert!(DitherParams::default().to_options().is_ok());
     }
 
     #[test]

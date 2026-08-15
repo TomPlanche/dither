@@ -1,5 +1,8 @@
 //! Resizing to the panel's working size.
 
+use std::fmt;
+use std::str::FromStr;
+
 use image::RgbImage;
 use image::imageops::{self, FilterType};
 use rayon::prelude::*;
@@ -51,20 +54,84 @@ pub const fn preset_names() -> [&'static str; SIZE_PRESETS.len()] {
 
 /// How a photo that does not share the working size's shape is made to fit it.
 ///
-/// Both are off by default, which is the camera's own behaviour: the photo is stretched into the landscape working size
-/// whatever shape it arrived in.
+/// The flags are off by default, which is the camera's own behaviour: the photo is stretched into the landscape working
+/// size whatever shape it arrived in.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct FitOptions {
     /// Transpose the working size for a photo of the other orientation, so a portrait photo stays portrait.
     pub keep_orientation: bool,
     /// Crop to the working size's aspect ratio rather than stretching the photo into it.
     pub crop: bool,
+    /// Which part of the photo the crop keeps. Ignored unless `crop`.
+    pub crop_from: CropOrigin,
+}
+
+/// Which part of a photo a crop keeps.
+///
+/// The kept rectangle's size is fixed by the target's aspect ratio, since anything else would distort the result. What
+/// is left to choose is where it sits, and only along one axis: a crop either spans the photo's full width or its full
+/// height, never neither. So an anchor moves the rectangle along the axis that has any slack and centres it on the
+/// other, which is why `Top` on a photo that is losing its sides behaves like `Center`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum CropOrigin {
+    /// The middle, which is what a photographer usually framed for.
+    #[default]
+    Center,
+    Top,
+    Bottom,
+    Left,
+    Right,
+    /// The rectangle's top-left corner, in source pixels.
+    ///
+    /// Clamped to what the photo can offer, because how much slack there is depends on the photo's own size, which the
+    /// caller asking for a corner does not always know.
+    At {
+        x: u32,
+        y: u32,
+    },
+}
+
+impl fmt::Display for CropOrigin {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            CropOrigin::Center => f.write_str("center"),
+            CropOrigin::Top => f.write_str("top"),
+            CropOrigin::Bottom => f.write_str("bottom"),
+            CropOrigin::Left => f.write_str("left"),
+            CropOrigin::Right => f.write_str("right"),
+            CropOrigin::At { x, y } => write!(f, "{x},{y}"),
+        }
+    }
+}
+
+impl FromStr for CropOrigin {
+    type Err = String;
+
+    /// Parses an anchor name, or `X,Y` for a corner. [`fmt::Display`] writes back what this reads.
+    fn from_str(raw: &str) -> Result<Self, Self::Err> {
+        match raw.trim() {
+            "center" => Ok(CropOrigin::Center),
+            "top" => Ok(CropOrigin::Top),
+            "bottom" => Ok(CropOrigin::Bottom),
+            "left" => Ok(CropOrigin::Left),
+            "right" => Ok(CropOrigin::Right),
+            corner => {
+                let (x, y) = corner
+                    .split_once(',')
+                    .ok_or_else(|| format!("expected center, top, bottom, left, right or X,Y, got `{raw}`"))?;
+                Ok(CropOrigin::At {
+                    x: x.trim().parse().map_err(|_| format!("bad crop x `{x}`"))?,
+                    y: y.trim().parse().map_err(|_| format!("bad crop y `{y}`"))?,
+                })
+            },
+        }
+    }
 }
 
 /// Scales a photo to the working size, fitted the way `fit` asks for.
 ///
 /// Turning both flags on is what keeps a photo of any shape undistorted: the target follows the photo's orientation,
-/// and whatever ratio is left over comes off the long side as a centred crop.
+/// and whatever ratio is left over comes off the long side as a crop.
 pub fn resize_to_fit(image: &RgbImage, target: (u32, u32), fit: FitOptions) -> RgbImage {
     let target = if fit.keep_orientation {
         orient_target(image.dimensions(), target)
@@ -73,7 +140,7 @@ pub fn resize_to_fit(image: &RgbImage, target: (u32, u32), fit: FitOptions) -> R
     };
 
     if fit.crop {
-        resize_cropped(image, target)
+        resize_cropped(image, target, fit.crop_from)
     } else {
         resize_image(image, target)
     }
@@ -93,12 +160,12 @@ pub fn resize_image(image: &RgbImage, target: (u32, u32)) -> RgbImage {
     resize_region(image, (0, 0, image.width(), image.height()), target)
 }
 
-/// Scales the largest centred part of a photo that already has the target's aspect ratio.
+/// Scales the largest part of a photo that already has the target's aspect ratio, taken from `origin`.
 ///
 /// Nothing is distorted, and what it costs instead is the edges: a 3:2 photo against the 2:3 panel keeps the middle
 /// third or so of its width. The crop is never materialised, so this reads the source once, the same as a plain resize.
-pub fn resize_cropped(image: &RgbImage, target: (u32, u32)) -> RgbImage {
-    resize_region(image, cover_rect(image.dimensions(), target), target)
+pub fn resize_cropped(image: &RgbImage, target: (u32, u32), origin: CropOrigin) -> RgbImage {
+    resize_region(image, cover_rect(image.dimensions(), target, origin), target)
 }
 
 /// `target`, transposed when it and `source` disagree on orientation.
@@ -112,11 +179,11 @@ pub fn orient_target(source: (u32, u32), target: (u32, u32)) -> (u32, u32) {
     }
 }
 
-/// The largest centred rectangle of `source` that has `target`'s aspect ratio, as `(x, y, width, height)`.
+/// The largest rectangle of `source` that has `target`'s aspect ratio, placed at `origin`, as `(x, y, width, height)`.
 ///
 /// The comparison is `sw * th` against `tw * sh` rather than a pair of divisions, so the ratios are exact and a photo
-/// that already matches the target keeps every pixel.
-pub fn cover_rect(source: (u32, u32), target: (u32, u32)) -> (u32, u32, u32, u32) {
+/// that already matches the target keeps every pixel, wherever `origin` points.
+pub fn cover_rect(source: (u32, u32), target: (u32, u32), origin: CropOrigin) -> (u32, u32, u32, u32) {
     let (sw, sh) = source;
     let (tw, th) = target;
     if tw == 0 || th == 0 {
@@ -126,14 +193,26 @@ pub fn cover_rect(source: (u32, u32), target: (u32, u32)) -> (u32, u32, u32, u32
     let (sw64, sh64) = (u64::from(sw), u64::from(sh));
     let (tw64, th64) = (u64::from(tw), u64::from(th));
 
-    if sw64 * th64 > tw64 * sh64 {
-        // The photo is the wider of the two, so the sides come off. Rounding down keeps the crop inside the photo.
-        let width = ((sh64 * tw64 / th64) as u32).clamp(1, sw);
-        ((sw - width) / 2, 0, width, sh)
+    // Rounding down keeps the rectangle inside the photo.
+    let (width, height) = if sw64 * th64 > tw64 * sh64 {
+        // The photo is the wider of the two, so the sides come off.
+        (((sh64 * tw64 / th64) as u32).clamp(1, sw), sh)
     } else {
-        let height = ((sw64 * th64 / tw64) as u32).clamp(1, sh);
-        (0, (sh - height) / 2, sw, height)
-    }
+        (sw, ((sw64 * th64 / tw64) as u32).clamp(1, sh))
+    };
+
+    // What the rectangle leaves over, which is only ever on one axis.
+    let (free_x, free_y) = (sw - width, sh - height);
+    let (x, y) = match origin {
+        CropOrigin::Center => (free_x / 2, free_y / 2),
+        CropOrigin::Top => (free_x / 2, 0),
+        CropOrigin::Bottom => (free_x / 2, free_y),
+        CropOrigin::Left => (0, free_y / 2),
+        CropOrigin::Right => (free_x, free_y / 2),
+        CropOrigin::At { x, y } => (x.min(free_x), y.min(free_y)),
+    };
+
+    (x, y, width, height)
 }
 
 /// Scales the `(x, y, width, height)` region of a photo to `target`.
@@ -333,27 +412,88 @@ mod tests {
 
     #[test]
     fn the_cover_rect_is_centred_and_matches_the_target_ratio() {
+        let centre = CropOrigin::Center;
         // A 2:3 photo against the 3:2 working size: the height comes off.
-        assert_eq!(cover_rect((3456, 5184), DISPLAY_IMAGE_SIZE), (0, 1440, 3456, 2304));
+        assert_eq!(
+            cover_rect((3456, 5184), DISPLAY_IMAGE_SIZE, centre),
+            (0, 1440, 3456, 2304)
+        );
         // A 3:2 photo against the 2:3 panel: the width comes off.
-        assert_eq!(cover_rect((5184, 3456), (400, 600)), (1440, 0, 2304, 3456));
+        assert_eq!(cover_rect((5184, 3456), (400, 600), centre), (1440, 0, 2304, 3456));
         // A photo that already matches keeps every pixel.
-        assert_eq!(cover_rect((1200, 800), DISPLAY_IMAGE_SIZE), (0, 0, 1200, 800));
+        assert_eq!(cover_rect((1200, 800), DISPLAY_IMAGE_SIZE, centre), (0, 0, 1200, 800));
 
-        // Whatever the pair, the kept rectangle is inside the photo and holds the target's ratio to within a pixel.
+        // Whatever the pair or the origin, the kept rectangle is inside the photo and holds the target's ratio to
+        // within a pixel.
         for source in [(3456, 5184), (8256, 5504), (1000, 1000), (1201, 801), (37, 4000)] {
             for target in [DISPLAY_IMAGE_SIZE, (400, 600), (100, 100)] {
-                let (x, y, w, h) = cover_rect(source, target);
-                assert!(
-                    x + w <= source.0 && y + h <= source.1,
-                    "{source:?} -> {target:?} escapes"
-                );
-                let drift = (u64::from(w) * u64::from(target.1)).abs_diff(u64::from(h) * u64::from(target.0));
-                assert!(
-                    drift <= u64::from(target.0).max(u64::from(target.1)),
-                    "{source:?} -> {target:?} kept {w}x{h}, off ratio"
-                );
+                for origin in [
+                    centre,
+                    CropOrigin::Top,
+                    CropOrigin::Bottom,
+                    CropOrigin::Left,
+                    CropOrigin::Right,
+                    CropOrigin::At { x: 9999, y: 9999 },
+                ] {
+                    let (x, y, w, h) = cover_rect(source, target, origin);
+                    assert!(
+                        x + w <= source.0 && y + h <= source.1,
+                        "{source:?} -> {target:?} from {origin} escapes"
+                    );
+                    let drift = (u64::from(w) * u64::from(target.1)).abs_diff(u64::from(h) * u64::from(target.0));
+                    assert!(
+                        drift <= u64::from(target.0).max(u64::from(target.1)),
+                        "{source:?} -> {target:?} kept {w}x{h}, off ratio"
+                    );
+                }
             }
+        }
+    }
+
+    #[test]
+    fn the_origin_moves_the_rectangle_along_whichever_axis_has_slack() {
+        // A 2:3 photo against the 3:2 working size keeps 3456x2304, so 2880 rows are free.
+        let source = (3456, 5184);
+        let size = (3456, 2304);
+        for (origin, expected) in [
+            (CropOrigin::Center, (0, 1440)),
+            (CropOrigin::Top, (0, 0)),
+            (CropOrigin::Bottom, (0, 2880)),
+            (CropOrigin::At { x: 0, y: 500 }, (0, 500)),
+            // Past the end, so it settles against the bottom.
+            (CropOrigin::At { x: 0, y: 99999 }, (0, 2880)),
+            // The width has no slack, so an x moves nothing and neither does a sideways anchor.
+            (CropOrigin::At { x: 700, y: 500 }, (0, 500)),
+            (CropOrigin::Left, (0, 1440)),
+            (CropOrigin::Right, (0, 1440)),
+        ] {
+            let (x, y, w, h) = cover_rect(source, DISPLAY_IMAGE_SIZE, origin);
+            assert_eq!(((x, y), (w, h)), (expected, size), "{origin} landed wrong");
+        }
+
+        // Turn the photo over and the free axis turns with it.
+        assert_eq!(cover_rect((5184, 3456), (400, 600), CropOrigin::Left).0, 0);
+        assert_eq!(cover_rect((5184, 3456), (400, 600), CropOrigin::Right).0, 2880);
+        assert_eq!(cover_rect((5184, 3456), (400, 600), CropOrigin::Top).0, 1440);
+    }
+
+    #[test]
+    fn an_origin_writes_back_what_it_reads() {
+        for origin in [
+            CropOrigin::Center,
+            CropOrigin::Top,
+            CropOrigin::Bottom,
+            CropOrigin::Left,
+            CropOrigin::Right,
+            CropOrigin::At { x: 12, y: 340 },
+        ] {
+            assert_eq!(origin.to_string().parse(), Ok(origin));
+        }
+
+        assert_eq!("  120 , 340 ".parse(), Ok(CropOrigin::At { x: 120, y: 340 }));
+        assert_eq!(CropOrigin::default(), CropOrigin::Center);
+        for bad in ["middle", "120", "120,", "-1,4", "1,2,3"] {
+            assert!(bad.parse::<CropOrigin>().is_err(), "`{bad}` should not parse");
         }
     }
 
@@ -373,7 +513,7 @@ mod tests {
         // Straight through the triangle filter, and through the box prefilter as well.
         for (width, target) in [(120u32, (40u32, 40u32)), (1200, (100, 100))] {
             let image = banded(width, width / 3);
-            let cropped = resize_cropped(&image, target);
+            let cropped = resize_cropped(&image, target, CropOrigin::Center);
             assert_eq!(cropped.dimensions(), target);
             assert!(
                 cropped.pixels().all(|p| p.0 == [0, 255, 0]),
@@ -383,6 +523,21 @@ mod tests {
 
             // Stretching instead keeps the red edges, which is the behaviour being opted out of.
             assert!(resize_image(&image, target).pixels().any(|p| p.0[0] > 128));
+
+            // Taken from the left instead, the same crop holds the red edge only.
+            let left = resize_cropped(&image, target, CropOrigin::Left);
+            assert!(
+                left.pixels().all(|p| p.0 == [255, 0, 0]),
+                "{width}px: the left crop should hold the red edge only, got {:?}",
+                left.get_pixel(0, 0)
+            );
+
+            // And an explicit corner lands on the same pixels as the anchor that names it.
+            let free = width - width / 3;
+            assert_eq!(
+                resize_cropped(&image, target, CropOrigin::At { x: free, y: 0 }),
+                resize_cropped(&image, target, CropOrigin::Right)
+            );
         }
     }
 
@@ -393,13 +548,17 @@ mod tests {
         let fit = FitOptions {
             keep_orientation: true,
             crop: true,
+            ..Default::default()
         };
 
         let out = resize_to_fit(&photo, DISPLAY_IMAGE_SIZE, fit);
         assert_eq!(out.dimensions(), (400, 600));
 
         // 3:4 is taller than the 2:3 it is going into, so the crop comes off the width.
-        assert_eq!(cover_rect(photo.dimensions(), (400, 600)), (67, 0, 1066, 1600));
+        assert_eq!(
+            cover_rect(photo.dimensions(), (400, 600), CropOrigin::Center),
+            (67, 0, 1066, 1600)
+        );
     }
 
     #[test]
@@ -427,6 +586,7 @@ mod tests {
         let fit = FitOptions {
             keep_orientation: true,
             crop: true,
+            ..Default::default()
         };
 
         // `iphone` is landscape, so a portrait photo dithers at its transpose.
