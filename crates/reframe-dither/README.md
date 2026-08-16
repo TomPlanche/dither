@@ -51,7 +51,22 @@ Keeping a different part than the middle:
 
 ```bash
 reframe-dither photo.jpg --crop --crop-from top
-reframe-dither photo.jpg --crop --crop-from 0,3800   # the rectangle's top-left corner, in source pixels
+reframe-dither photo.jpg --crop --crop-from 0,3800   # starts here, in source pixels: the top 3800 rows are dropped
+```
+
+Checking the framing without the dither in the way:
+
+```bash
+reframe-dither photo.jpg -m none --crop --crop-from 0,600
+# the photo resized and cropped, and nothing else
+```
+
+`--verbose` reports the rectangle that was kept, which is how to tell what a corner cost:
+
+```bash
+reframe-dither photo.jpg --preset instagram-story --crop --crop-from 0,200 -v
+# photo.jpg (1536x2048) -> photo_dithered.png (1080x1920) in 136ms
+#   crop: 1039x1848 from 0,200
 ```
 
 A size a platform expects, rather than the panel's:
@@ -85,6 +100,7 @@ reframe-dither photo.jpg --buffer
 | `--keep-orientation` | off | Resize a portrait photo to the transpose of `--size`, so it stays portrait |
 | `--crop` | off | Crop to `--size`'s aspect ratio instead of stretching the photo into it |
 | `--crop-from <WHERE>` | `center` | Which part the crop keeps: `center`, `top`, `bottom`, `left`, `right`, or a corner as `X,Y`. Needs `--crop` |
+| `--crop-zoom <F>` | `1.0` | `1.0` to `10.0`. Above 1.0 the crop keeps a proportionally smaller rectangle. Needs `--crop`. Not needed with a corner |
 | `--upscale-2x` | off | Nearest-neighbour doubling, matching the dashboard export |
 | `-f, --format <F>` | `indexed` | `indexed` (palette PNG, as the camera saves) or `rgb` |
 | `--buffer` | off | Also write the packed e-paper frame buffer |
@@ -118,6 +134,7 @@ A preset names one orientation, and `--keep-orientation` transposes whichever on
 | `burkes` | error diffusion | Like Stucki but cheaper, grainier |
 | `jarvis` | error diffusion | Widest spread, smoothest |
 | `ordered` | Bayer threshold | Structured rather than organic. Strong colour cast |
+| `none` | none | Writes the photo resized and cropped, for checking the framing. Always an RGB PNG, and refused with `--buffer` |
 
 Only `floyd-steinberg` and `ordered` exist in the Python original; the rest come free from the shared kernel table.
 
@@ -161,9 +178,11 @@ let fit = FitOptions { keep_orientation: true, crop: true, ..Default::default() 
 let sized = resize::resize_to_fit(&photo, resize::DISPLAY_IMAGE_SIZE, fit);
 ```
 
-Which part the crop keeps is `FitOptions::crop_from`, a `CropOrigin`: `Center` by default, `Top`, `Bottom`, `Left`, `Right`, or `At { x, y }` for the rectangle's top-left corner in source pixels. The rectangle's size is fixed by the target's ratio, so only where it sits is free, and only along the one axis that has any slack: `Top` on a photo losing its sides behaves like `Center`. An `At` past the end settles against the far edge rather than failing, since how much slack there is depends on the photo's own size. `CropOrigin` parses and prints the same spelling the CLI and the HTTP API use.
+Which part the crop keeps is `FitOptions::crop_from`, a `CropOrigin`, and its two forms work from opposite ends. An anchor (`Center` by default, `Top`, `Bottom`, `Left`, `Right`) takes the largest rectangle the target's ratio allows and puts it against a side; since such a rectangle spans the photo's full width or full height, an anchor only moves it along the axis that has slack, and `Top` on a photo losing its sides behaves like `Center`. `At { x, y }` is the other way round: the corner is where the crop starts, so it is kept as given and the rectangle is the largest that fits below and to the right of it. That is what makes `At { x: 0, y: 200 }` drop the top 200 rows of any photo, at the cost of size, and a corner past the last pixel keeps that pixel.
 
-`resize::cover_rect` returns the rectangle `crop` would keep, for a caller that wants to say what a photo will lose before running the pipeline. Nothing is copied to crop: the region is read in place, so cropping costs the same as not cropping.
+`FitOptions::crop_zoom` shrinks whatever the origin settled on, both sides by the same factor. It is what moves an anchor in from the edges; a corner does not need it. `CropOrigin` parses and prints the same spelling the CLI and the HTTP API use.
+
+`resize::fitted_rect` returns the region `resize_to_fit` will read, and `resize::fitted_size` the size it will produce. Both are what `resize_to_fit` itself uses, so a caller reporting them cannot drift from what the pipeline did. `resize::cover_rect` is the geometry underneath, for a caller that wants to say what a photo will lose before running anything. Nothing is copied to crop: the region is read in place, so cropping costs the same as not cropping.
 
 The named sizes are `resize::SIZE_PRESETS`, a table of `(name, (width, height))`, with `resize::preset_size` for the lookup and `resize::preset_names` for building a picker. They are plain data, so a caller is free to ignore them and pass its own size.
 

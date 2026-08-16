@@ -276,20 +276,138 @@ async fn crop_from_chooses_which_part_is_kept() {
         );
     }
 
-    // A corner past what the photo can offer settles against the far edge rather than failing.
-    let uri = "/api/dither?width=40&height=40&crop=true&crop_from=99999,99999";
-    let response = call(post(uri, "image/png", banded_png())).await;
-    assert_eq!(response.status(), StatusCode::OK);
-    let clamped = io::decode_rgb(&body_bytes(response).await).expect("the result decodes");
-    assert!(clamped.pixels().all(|p| p.0.iter().all(|&c| c < 100)));
-
-    // And a name that means nothing is a 400 rather than a silent centre crop.
+    // A name that means nothing is a 400 rather than a silent centre crop.
     let uri = "/api/dither?width=40&height=40&crop=true&crop_from=middle";
     let response = call(post(uri, "image/png", banded_png())).await;
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     let json: serde_json::Value = serde_json::from_slice(&body_bytes(response).await).expect("the error is JSON");
     let error = json["error"].as_str().expect("error is a string");
     assert!(error.contains("X,Y"), "the message should give the syntax: {error}");
+}
+
+#[tokio::test]
+async fn method_none_returns_the_framing_without_dithering_it() {
+    // The band is grey rather than black or white, so the palette would be visible in the result.
+    let grey = {
+        let image = RgbImage::from_raw(4, 4, vec![120u8; 4 * 4 * 3]).expect("the buffer matches the size");
+        io::encode_rgb_png(&image).expect("the test image encodes")
+    };
+
+    let response = call(post(
+        "/api/dither?method=none&width=8&height=8",
+        "image/png",
+        grey.clone(),
+    ))
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["content-type"], "image/png");
+    assert_eq!(response.headers()["x-image-size"], "8x8");
+
+    // Straight back at the working size, in its own colour, which no palette slot carries.
+    let plain = io::decode_rgb(&body_bytes(response).await).expect("the result decodes");
+    assert_eq!(plain.dimensions(), (8, 8));
+    assert!(
+        plain.pixels().all(|p| p.0 == [120, 120, 120]),
+        "expected the photo untouched, got {:?}",
+        plain.get_pixel(0, 0)
+    );
+
+    // The crop and the scale still apply, and the crop rect is still reported.
+    let uri = "/api/dither?method=none&width=40&height=40&crop=true&crop_from=40,0&scale=2";
+    let response = call(post(uri, "image/png", banded_png())).await;
+    assert_eq!(response.headers()["x-image-size"], "80x80");
+    assert_eq!(response.headers()["x-crop-rect"], "40,0,40,40");
+
+    // `format` has no palette to choose, so it is the plain PNG either way.
+    let uri = "/api/dither?method=none&width=8&height=8&format=indexed";
+    let response = call(post(uri, "image/png", grey)).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let plain = io::decode_rgb(&body_bytes(response).await).expect("the result decodes");
+    assert!(plain.pixels().all(|p| p.0 == [120, 120, 120]));
+}
+
+#[tokio::test]
+async fn the_panel_refuses_an_undithered_image() {
+    let response = call(post("/api/buffer?method=none", "image/png", source_png())).await;
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let json: serde_json::Value = serde_json::from_slice(&body_bytes(response).await).expect("the error is JSON");
+    let error = json["error"].as_str().expect("error is a string");
+    assert!(
+        error.contains("method=none"),
+        "the message should name the cause: {error}"
+    );
+}
+
+#[tokio::test]
+async fn the_crop_rect_header_says_which_part_of_the_upload_was_read() {
+    // No crop: the whole 120x40 photo, which also tells a client what the source measured.
+    let response = call(post("/api/dither?width=40&height=40", "image/png", banded_png())).await;
+    assert_eq!(response.headers()["x-crop-rect"], "0,0,120,40");
+
+    // Cropped to the square middle.
+    let uri = "/api/dither?width=40&height=40&crop=true";
+    let response = call(post(uri, "image/png", banded_png())).await;
+    assert_eq!(response.headers()["x-crop-rect"], "40,0,40,40");
+
+    // The buffer route reports it too, on a size the panel takes.
+    let response = call(post("/api/buffer?crop=true", "image/png", banded_png())).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["x-crop-rect"], "30,0,60,40");
+}
+
+#[tokio::test]
+async fn a_crop_corner_is_kept_on_both_axes() {
+    // The white band runs from x=40 to x=80, so a corner at 40,0 lands on it exactly.
+    let uri = "/api/dither?width=40&height=40&crop=true&crop_from=40,0";
+    let response = call(post(uri, "image/png", banded_png())).await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["x-crop-rect"], "40,0,40,40");
+    let cropped = io::decode_rgb(&body_bytes(response).await).expect("the result decodes");
+    assert!(cropped.pixels().all(|p| p.0.iter().all(|&c| c > 200)));
+
+    // A corner partway down keeps what is left below it. The y is never ignored, whatever the photo's shape: this is
+    // the 3:1 source whose square crop would otherwise span the full height.
+    let uri = "/api/dither?width=40&height=40&crop=true&crop_from=0,20";
+    let response = call(post(uri, "image/png", banded_png())).await;
+    assert_eq!(response.headers()["x-crop-rect"], "0,20,20,20");
+
+    // Past the last pixel it keeps that pixel rather than sliding back to somewhere it was not asked for.
+    let uri = "/api/dither?width=40&height=40&crop=true&crop_from=99999,99999";
+    let response = call(post(uri, "image/png", banded_png())).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["x-crop-rect"], "119,39,1,1");
+}
+
+#[tokio::test]
+async fn the_crop_zoom_shrinks_what_the_origin_settled_on() {
+    // Centred, the square crop of a 3:1 photo is the 40x40 middle.
+    let uri = "/api/dither?width=40&height=40&crop=true";
+    let response = call(post(uri, "image/png", banded_png())).await;
+    assert_eq!(response.headers()["x-crop-rect"], "40,0,40,40");
+
+    // Zoomed, it keeps 20x20 of the same middle, still inside the white band.
+    let uri = "/api/dither?width=40&height=40&crop=true&crop_zoom=2";
+    let response = call(post(uri, "image/png", banded_png())).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["x-image-size"], "40x40");
+    assert_eq!(response.headers()["x-crop-rect"], "50,10,20,20");
+
+    let zoomed = io::decode_rgb(&body_bytes(response).await).expect("the result decodes");
+    assert!(
+        zoomed.pixels().all(|p| p.0.iter().all(|&c| c > 200)),
+        "the zoomed crop sits inside the white band, got {:?}",
+        zoomed.get_pixel(0, 0)
+    );
+
+    // Out of range is a 400 naming the bounds.
+    let uri = "/api/dither?width=40&height=40&crop=true&crop_zoom=0.5";
+    let response = call(post(uri, "image/png", banded_png())).await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let json: serde_json::Value = serde_json::from_slice(&body_bytes(response).await).expect("the error is JSON");
+    let error = json["error"].as_str().expect("error is a string");
+    assert!(error.contains("1.0"), "the message should give the range: {error}");
 }
 
 #[tokio::test]

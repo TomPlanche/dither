@@ -10,7 +10,7 @@ use clap::builder::TypedValueParser;
 use clap::{Parser, ValueEnum};
 use rayon::prelude::*;
 use reframe_dither::{
-    BayerSize, CropOrigin, DitherMethod, DitherOptions, FitOptions, IndexedImage, Orientation, RgbImage,
+    BayerSize, CropOrigin, DitherMethod, DitherOptions, FitOptions, IndexedImage, MAX_CROP_ZOOM, Orientation, RgbImage,
     apply_dithering, display, io, resize,
 };
 
@@ -28,19 +28,23 @@ enum MethodArg {
     Jarvis,
     /// Bayer threshold matrix. Structured rather than organic.
     Ordered,
+    /// No dithering: writes the photo resized and cropped, for checking the framing.
+    None,
 }
 
-impl From<MethodArg> for DitherMethod {
-    fn from(value: MethodArg) -> Self {
+impl MethodArg {
+    /// The pipeline's own method, or `None` when the run is only about the framing.
+    fn dither(self) -> Option<DitherMethod> {
         use reframe_dither::{ATKINSON, BURKES, FLOYD_STEINBERG, JARVIS_JUDICE_NINKE, STUCKI};
-        match value {
+        Some(match self {
             MethodArg::FloydSteinberg => DitherMethod::ErrorDiffusion(FLOYD_STEINBERG),
             MethodArg::Atkinson => DitherMethod::ErrorDiffusion(ATKINSON),
             MethodArg::Stucki => DitherMethod::ErrorDiffusion(STUCKI),
             MethodArg::Burkes => DitherMethod::ErrorDiffusion(BURKES),
             MethodArg::Jarvis => DitherMethod::ErrorDiffusion(JARVIS_JUDICE_NINKE),
             MethodArg::Ordered => DitherMethod::Ordered,
-        }
+            MethodArg::None => return Option::None,
+        })
     }
 }
 
@@ -124,6 +128,10 @@ struct Cli {
     #[arg(long, requires = "crop", default_value = "center", value_name = "WHERE")]
     crop_from: CropOrigin,
 
+    /// How far into the photo the crop moves. Above 1.0 it keeps a smaller rectangle, which frees both axes.
+    #[arg(long, requires = "crop", default_value_t = 1.0, value_name = "F", value_parser = parse_zoom)]
+    crop_zoom: f32,
+
     /// Double the output with nearest-neighbour, matching the dashboard export.
     #[arg(long)]
     upscale_2x: bool,
@@ -157,16 +165,29 @@ fn parse_size(raw: &str) -> Result<(u32, u32), String> {
     Ok((w, h))
 }
 
+/// The crop zoom, which has to be at least 1.0: below that there is nothing left inside the photo to keep.
+fn parse_zoom(raw: &str) -> Result<f32, String> {
+    let zoom: f32 = raw
+        .trim()
+        .parse()
+        .map_err(|_| format!("expected a number, got `{raw}`"))?;
+    if !zoom.is_finite() || !(1.0..=MAX_CROP_ZOOM).contains(&zoom) {
+        return Err(format!("expected 1.0 to {MAX_CROP_ZOOM}, got {zoom}"));
+    }
+    Ok(zoom)
+}
+
 impl Cli {
-    fn dither_options(&self) -> DitherOptions {
-        DitherOptions {
+    /// The dithering to run, or `None` under `--method none`.
+    fn dither_options(&self) -> Option<DitherOptions> {
+        self.method.dither().map(|method| DitherOptions {
             saturation: self.saturation,
             brightness_factor: self.brightness,
             color_factor: self.color,
-            method: self.method.into(),
+            method,
             bayer_size: BayerSize::from_side_or_default(self.bayer_size),
             threshold_scale: self.threshold_scale,
-        }
+        })
     }
 
     /// The size to dither at: a preset if one was named, `--size` otherwise.
@@ -179,6 +200,7 @@ impl Cli {
             keep_orientation: self.keep_orientation,
             crop: self.crop,
             crop_from: self.crop_from,
+            crop_zoom: self.crop_zoom,
         }
     }
 
@@ -201,6 +223,37 @@ impl Cli {
     }
 }
 
+/// What came out of the pipeline: palette slots, or the plain photo when `--method none` skipped the dither.
+enum Rendered {
+    Palette(IndexedImage),
+    Plain(RgbImage),
+}
+
+impl Rendered {
+    fn dimensions(&self) -> (u32, u32) {
+        match self {
+            Rendered::Palette(image) => image.size(),
+            Rendered::Plain(image) => image.dimensions(),
+        }
+    }
+
+    fn scaled(self, factor: u32) -> Self {
+        match self {
+            Rendered::Palette(image) => Rendered::Palette(image.scale_nearest(factor)),
+            Rendered::Plain(image) => Rendered::Plain(resize::scale_nearest(&image, factor)),
+        }
+    }
+
+    /// Writes it out. An undithered photo has no palette to index, so `--format` does not apply to it.
+    fn save(&self, path: &Path, format: FormatArg) -> Result<(), io::IoError> {
+        match (self, format) {
+            (Rendered::Palette(image), FormatArg::Indexed) => io::save_indexed_png(image, path),
+            (Rendered::Palette(image), FormatArg::Rgb) => io::save_rgb_png(&image.to_rgb(), path),
+            (Rendered::Plain(image), _) => io::save_rgb_png(image, path),
+        }
+    }
+}
+
 /// Runs the pipeline for one input and returns what should be printed for it.
 ///
 /// The report is returned rather than printed because inputs are processed in parallel, and interleaved lines would be
@@ -210,39 +263,38 @@ fn process(cli: &Cli, input: &Path) -> Result<String, Box<dyn Error>> {
     let photo = io::load_rgb(input)?;
     let source_size = photo.dimensions();
 
+    // What the crop kept, so `--verbose` can say why a coordinate did not move anything.
+    let kept = (!cli.no_resize && cli.crop).then(|| resize::fitted_rect(source_size, cli.working_size(), cli.fit()));
+
     let working: RgbImage = if cli.no_resize {
         photo
     } else {
         resize::resize_to_fit(&photo, cli.working_size(), cli.fit())
     };
 
-    let options = cli.dither_options();
-
     // Packing the frame buffer runs the dither too, so only do the work once.
-    let (dithered, buffer) = if cli.buffer {
-        let (buf, dithered, orientation) = display::dither_to_display_buffer(&working, &options);
-        if orientation == Orientation::Unexpected {
-            eprintln!(
-                "warning: {} is {}x{}, not {}x{} or {}x{}; rotating anyway",
-                input.display(),
-                working.width(),
-                working.height(),
-                resize::DISPLAY_IMAGE_SIZE.0,
-                resize::DISPLAY_IMAGE_SIZE.1,
-                reframe_dither::DISPLAY_PANEL_SIZE.0,
-                reframe_dither::DISPLAY_PANEL_SIZE.1,
-            );
-        }
-        (dithered, Some(buf))
-    } else {
-        (apply_dithering(&working, &options), None)
+    let (rendered, buffer) = match cli.dither_options() {
+        None => (Rendered::Plain(working), None),
+        Some(options) if cli.buffer => {
+            let (buf, dithered, orientation) = display::dither_to_display_buffer(&working, &options);
+            if orientation == Orientation::Unexpected {
+                eprintln!(
+                    "warning: {} is {}x{}, not {}x{} or {}x{}; rotating anyway",
+                    input.display(),
+                    working.width(),
+                    working.height(),
+                    resize::DISPLAY_IMAGE_SIZE.0,
+                    resize::DISPLAY_IMAGE_SIZE.1,
+                    reframe_dither::DISPLAY_PANEL_SIZE.0,
+                    reframe_dither::DISPLAY_PANEL_SIZE.1,
+                );
+            }
+            (Rendered::Palette(dithered), Some(buf))
+        },
+        Some(options) => (Rendered::Palette(apply_dithering(&working, &options)), None),
     };
 
-    let final_image: IndexedImage = if cli.upscale_2x {
-        dithered.scale_nearest(2)
-    } else {
-        dithered
-    };
+    let final_image = if cli.upscale_2x { rendered.scaled(2) } else { rendered };
 
     let out_path = cli.output_path(input);
     let buffer_path = out_path.with_extension("bin");
@@ -259,10 +311,7 @@ fn process(cli: &Cli, input: &Path) -> Result<String, Box<dyn Error>> {
         fs::create_dir_all(parent)?;
     }
 
-    match cli.format {
-        FormatArg::Indexed => io::save_indexed_png(&final_image, &out_path)?,
-        FormatArg::Rgb => io::save_rgb_png(&final_image.to_rgb(), &out_path)?,
-    }
+    final_image.save(&out_path, cli.format)?;
 
     if let Some(buf) = &buffer {
         fs::write(&buffer_path, buf)?;
@@ -278,10 +327,14 @@ fn process(cli: &Cli, input: &Path) -> Result<String, Box<dyn Error>> {
         source_size.0,
         source_size.1,
         out_path.display(),
-        final_image.width(),
-        final_image.height(),
+        final_image.dimensions().0,
+        final_image.dimensions().1,
         started.elapsed().as_secs_f64() * 1000.0,
     );
+
+    if let Some((x, y, width, height)) = kept {
+        let _ = write!(report, "\n  crop: {width}x{height} from {x},{y}");
+    }
 
     if let Some(buf) = &buffer {
         let _ = write!(
@@ -297,6 +350,12 @@ fn process(cli: &Cli, input: &Path) -> Result<String, Box<dyn Error>> {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+
+    // The panel takes palette slots, so there is nothing to pack without a dither. Caught once rather than per input.
+    if cli.buffer && cli.method == MethodArg::None {
+        eprintln!("error: --buffer needs a dithered image, and --method none skips the dither");
+        return ExitCode::FAILURE;
+    }
 
     // Decoding dominates the pipeline and is single-threaded per photo, so a batch is fastest with one photo per core.
     // `map` over an indexed parallel iterator keeps the results in input order, so the output does not depend on which

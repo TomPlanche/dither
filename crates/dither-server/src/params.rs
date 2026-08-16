@@ -9,7 +9,7 @@ use axum::extract::{FromRequestParts, Query};
 use axum::http::request::Parts;
 use reframe_dither::{
     ATKINSON, BURKES, BayerSize, CropOrigin, DitherMethod, DitherOptions, FLOYD_STEINBERG, FitOptions,
-    JARVIS_JUDICE_NINKE, STUCKI,
+    JARVIS_JUDICE_NINKE, MAX_CROP_ZOOM, STUCKI,
 };
 use serde::{Deserialize, Serialize};
 
@@ -33,29 +33,35 @@ pub enum Method {
     Burkes,
     Jarvis,
     Ordered,
+    /// No dithering: the photo comes back resized and cropped, and nothing else.
+    ///
+    /// For checking the framing, where the dither pattern is in the way. The palette settings and `format` do not
+    /// apply, since there is no palette: the result is always a plain RGB PNG.
+    None,
 }
 
 impl Method {
-    pub const ALL: [Method; 6] = [
+    pub const ALL: [Method; 7] = [
         Method::FloydSteinberg,
         Method::Atkinson,
         Method::Stucki,
         Method::Burkes,
         Method::Jarvis,
         Method::Ordered,
+        Method::None,
     ];
-}
 
-impl From<Method> for DitherMethod {
-    fn from(value: Method) -> Self {
-        match value {
+    /// The pipeline's own method, or `None` when the request asked for the resize alone.
+    pub fn dither(self) -> Option<DitherMethod> {
+        Some(match self {
             Method::FloydSteinberg => DitherMethod::ErrorDiffusion(FLOYD_STEINBERG),
             Method::Atkinson => DitherMethod::ErrorDiffusion(ATKINSON),
             Method::Stucki => DitherMethod::ErrorDiffusion(STUCKI),
             Method::Burkes => DitherMethod::ErrorDiffusion(BURKES),
             Method::Jarvis => DitherMethod::ErrorDiffusion(JARVIS_JUDICE_NINKE),
             Method::Ordered => DitherMethod::Ordered,
-        }
+            Method::None => return Option::None,
+        })
     }
 }
 
@@ -150,6 +156,13 @@ pub struct DitherParams {
     /// unset, for the same reason: sending the defaults back unchanged has to stay a valid request.
     #[serde(default, with = "crop_from", skip_serializing_if = "Option::is_none")]
     pub crop_from: Option<CropOrigin>,
+    /// How far into the photo the crop moves, `1.0` to `10.0`.
+    ///
+    /// At `1.0` the kept rectangle touches two opposite edges, so `crop_from` can only slide it along one axis. Above
+    /// that it keeps a proportionally smaller rectangle, which frees the other axis too. Refused without `crop`, and
+    /// left out of `GET /api/options` when unset, like `crop_from`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub crop_zoom: Option<f64>,
     /// Nearest-neighbour upscale applied to the result, 1 to 4.
     pub scale: u32,
     pub format: Format,
@@ -172,6 +185,7 @@ impl Default for DitherParams {
             keep_orientation: false,
             crop: false,
             crop_from: None,
+            crop_zoom: None,
             scale: 1,
             format: Format::Indexed,
         }
@@ -180,7 +194,10 @@ impl Default for DitherParams {
 
 impl DitherParams {
     /// Checks the ranges and builds the pipeline's own options struct.
-    pub fn to_options(self) -> Result<DitherOptions, ApiError> {
+    ///
+    /// `None` when `method=none` asked for the resize alone, in which case the palette settings are checked but go
+    /// unused, the same way `bayer_size` does under error diffusion.
+    pub fn to_options(self) -> Result<Option<DitherOptions>, ApiError> {
         ratio("saturation", self.saturation)?;
         factor("brightness", self.brightness)?;
         factor("color", self.color)?;
@@ -197,10 +214,24 @@ impl DitherParams {
         dimension("height", self.height)?;
 
         // A setting that cannot take effect is a mistake worth naming, the way an unknown parameter is.
-        if self.crop_from.is_some() && !self.crop {
-            return Err(ApiError::bad_request(
-                "crop_from needs crop=true, which is what places the rectangle it picks",
-            ));
+        let unusable = [
+            ("crop_from", self.crop_from.is_some()),
+            ("crop_zoom", self.crop_zoom.is_some()),
+        ]
+        .into_iter()
+        .find_map(|(name, given)| (given && !self.crop).then_some(name));
+        if let Some(name) = unusable {
+            return Err(ApiError::bad_request(format!(
+                "{name} needs crop=true, which is the crop it places"
+            )));
+        }
+
+        if let Some(zoom) = self.crop_zoom
+            && (!zoom.is_finite() || !(1.0..=f64::from(MAX_CROP_ZOOM)).contains(&zoom))
+        {
+            return Err(ApiError::bad_request(format!(
+                "crop_zoom must be between 1.0 and {MAX_CROP_ZOOM}, got {zoom}"
+            )));
         }
 
         if self.scale == 0 || self.scale > MAX_SCALE {
@@ -210,14 +241,14 @@ impl DitherParams {
             )));
         }
 
-        Ok(DitherOptions {
+        Ok(self.method.dither().map(|method| DitherOptions {
             saturation: self.saturation,
             brightness_factor: self.brightness,
             color_factor: self.color,
-            method: self.method.into(),
+            method,
             bayer_size: BayerSize::from_side_or_default(self.bayer_size),
             threshold_scale: self.threshold_scale,
-        })
+        }))
     }
 
     /// The size to dither at, or `None` when the source resolution is kept.
@@ -236,6 +267,7 @@ impl DitherParams {
             keep_orientation: self.keep_orientation,
             crop: self.crop,
             crop_from: self.crop_from.unwrap_or_default(),
+            crop_zoom: self.crop_zoom.map_or(1.0, |zoom| zoom as f32),
         }
     }
 }
@@ -316,7 +348,29 @@ mod tests {
     #[test]
     fn defaults_match_the_pipeline() {
         let options = DitherParams::default().to_options().expect("defaults are valid");
-        assert_eq!(options, DitherOptions::default());
+        assert_eq!(options, Some(DitherOptions::default()));
+    }
+
+    #[test]
+    fn method_none_asks_for_the_resize_alone() {
+        let params = DitherParams {
+            method: Method::None,
+            ..Default::default()
+        };
+        assert_eq!(params.to_options().expect("still valid"), None);
+        assert_eq!(Method::None.dither(), None);
+
+        // The palette settings are still checked, so a typo is caught whichever method is running.
+        let bad = DitherParams {
+            saturation: 9.0,
+            ..params
+        };
+        assert!(bad.to_options().is_err());
+
+        // Every other method has one.
+        for method in Method::ALL.iter().filter(|m| **m != Method::None) {
+            assert!(method.dither().is_some(), "{method:?} should name a dither");
+        }
     }
 
     #[test]
@@ -397,6 +451,7 @@ mod tests {
             keep_orientation: true,
             crop: true,
             crop_from: Some(CropOrigin::At { x: 40, y: 90 }),
+            crop_zoom: Some(2.5),
             ..Default::default()
         };
         assert_eq!(
@@ -405,15 +460,18 @@ mod tests {
                 keep_orientation: true,
                 crop: true,
                 crop_from: CropOrigin::At { x: 40, y: 90 },
+                crop_zoom: 2.5,
             }
         );
 
-        // Unset, the crop falls back to the middle rather than to nothing.
+        // Unset, the crop falls back to the middle at full size rather than to nothing.
         let params = DitherParams {
             crop_from: None,
+            crop_zoom: None,
             ..params
         };
         assert_eq!(params.fit().crop_from, CropOrigin::Center);
+        assert_eq!(params.fit().crop_zoom, 1.0);
 
         // `resize=false` drops the working size, and the flags then have nothing to act on.
         let params = DitherParams {
@@ -458,18 +516,46 @@ mod tests {
     }
 
     #[test]
-    fn crop_from_without_crop_is_refused_rather_than_ignored() {
-        let params = DitherParams {
-            crop: false,
-            crop_from: Some(CropOrigin::Top),
-            ..Default::default()
-        };
-        // What the message says is checked over HTTP, where a client would read it.
-        assert!(params.to_options().is_err(), "crop_from alone should be refused");
+    fn a_crop_setting_without_the_crop_is_refused_rather_than_ignored() {
+        let alone = [
+            DitherParams {
+                crop_from: Some(CropOrigin::Top),
+                ..Default::default()
+            },
+            DitherParams {
+                crop_zoom: Some(2.0),
+                ..Default::default()
+            },
+        ];
 
-        // The same origin with the crop on is fine, and so is neither.
-        assert!(DitherParams { crop: true, ..params }.to_options().is_ok());
+        for params in alone {
+            // What the message says is checked over HTTP, where a client would read it.
+            assert!(params.to_options().is_err(), "{params:?} should be refused");
+            // The same setting with the crop on is fine.
+            assert!(DitherParams { crop: true, ..params }.to_options().is_ok());
+        }
+
+        // And neither is fine too.
         assert!(DitherParams::default().to_options().is_ok());
+    }
+
+    #[test]
+    fn the_crop_zoom_range_is_checked() {
+        let zoomed = |zoom: f64| {
+            DitherParams {
+                crop: true,
+                crop_zoom: Some(zoom),
+                ..Default::default()
+            }
+            .to_options()
+        };
+
+        assert!(zoomed(1.0).is_ok());
+        assert!(zoomed(f64::from(MAX_CROP_ZOOM)).is_ok());
+        // Under 1.0 there is nothing left inside the photo to keep, and past the cap it is a stamp being blown up.
+        for bad in [0.9, 0.0, -1.0, f64::from(MAX_CROP_ZOOM) + 0.1, f64::NAN] {
+            assert!(zoomed(bad).is_err(), "crop_zoom {bad} should be refused");
+        }
     }
 
     #[test]
