@@ -171,26 +171,31 @@ async fn keep_orientation_transposes_the_working_size_for_a_portrait_upload() {
 }
 
 #[tokio::test]
-async fn a_preset_names_the_working_size() {
+async fn a_preset_reshapes_the_working_size_rather_than_replacing_it() {
+    // 9:16 fitted inside the default 600x400, which the ratio turns over first.
     let response = call(post("/api/dither?preset=instagram-story", "image/png", source_png())).await;
 
     assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(response.headers()["x-image-size"], "1080x1920");
+    assert_eq!(response.headers()["x-image-size"], "337x600");
 
-    // It takes width and height's place rather than being combined with them. The panel presets stand in for the
-    // platform ones here, which dither at up to 2 MP apiece.
+    // The pair still says how much gets dithered, so a bigger one buys more pixels of the same shape.
+    let uri = "/api/dither?preset=instagram-story&width=1080&height=1080";
+    let response = call(post(uri, "image/png", source_png())).await;
+    assert_eq!(response.headers()["x-image-size"], "607x1080");
+
+    // And a smaller one costs them: 2:3 inside 320x240 rather than the panel's own 400x600.
     let uri = "/api/dither?preset=panel-portrait&width=320&height=240";
     let response = call(post(uri, "image/png", source_png())).await;
-    assert_eq!(response.headers()["x-image-size"], "400x600");
+    assert_eq!(response.headers()["x-image-size"], "213x320");
 
-    // And it follows the photo when the orientation is kept: the portrait preset turned over for a landscape upload.
+    // It follows the photo when the orientation is kept: the portrait preset turned over for a landscape upload.
     let uri = "/api/dither?preset=panel-portrait&keep_orientation=true";
     let response = call(post(uri, "image/png", source_png())).await;
     assert_eq!(response.headers()["x-image-size"], "600x400");
 }
 
 #[tokio::test]
-async fn options_lists_every_preset_with_its_size() {
+async fn options_lists_every_preset_with_its_ratio() {
     let json: serde_json::Value =
         serde_json::from_slice(&body_bytes(call(get("/api/options")).await).await).expect("options is JSON");
 
@@ -211,17 +216,33 @@ async fn options_lists_every_preset_with_its_size() {
             "iphone"
         ]
     );
-    assert_eq!(presets[0]["size"], serde_json::json!([600, 400]));
+    assert_eq!(presets[0]["ratio"], serde_json::json!([3, 2]));
 
-    // The two panel entries end to end. That every listed name deserialises is a unit test; dithering all seven here
-    // would spend most of the suite's time on the 12 MP one.
-    for preset in presets.iter().take(2) {
+    // Every listed name end to end. A preset is fitted inside `width` and `height`, so none of them can cost more than
+    // the default 600x400 does, and all seven are affordable here.
+    for preset in presets {
         let name = preset["name"].as_str().expect("a preset name");
         let response = call(post(&format!("/api/dither?preset={name}"), "image/png", source_png())).await;
         assert_eq!(response.status(), StatusCode::OK, "{name} should be accepted");
 
-        let size = preset["size"].as_array().expect("a preset size");
-        assert_eq!(response.headers()["x-image-size"], format!("{}x{}", size[0], size[1]));
+        let ratio = preset["ratio"].as_array().expect("a preset ratio");
+        let (rw, rh) = (
+            ratio[0].as_u64().expect("a width"),
+            ratio[1].as_u64().expect("a height"),
+        );
+
+        // What came back is the ratio the listing advertised, to within the rounding, and inside the 600x400 that was
+        // asked for or inside its transpose when the ratio turned it over.
+        let size = response.headers()["x-image-size"].to_str().expect("a size header");
+        let (width, height) = size.split_once('x').expect("WIDTHxHEIGHT");
+        let (width, height): (u64, u64) = (width.parse().expect("a width"), height.parse().expect("a height"));
+        let room = if rh > rw { (400, 600) } else { (600, 400) };
+        assert!(
+            width <= room.0 && height <= room.1,
+            "{name} came back {size}, outside the 600x400 it was fitted inside"
+        );
+        let drift = (width * rh).abs_diff(height * rw);
+        assert!(drift <= rw.max(rh), "{name} came back {size}, off {rw}:{rh}");
     }
 }
 

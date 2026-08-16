@@ -65,9 +65,9 @@ impl Method {
     }
 }
 
-/// A working size that goes by name.
+/// An aspect ratio that goes by name.
 ///
-/// The variants mirror [`reframe_dither::SIZE_PRESETS`], which is where the pixel counts come from. Serde does the
+/// The variants mirror [`reframe_dither::RATIO_PRESETS`], which is where the ratios come from. Serde does the
 /// validating: an unknown name is refused with the list of the ones that work.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -105,9 +105,9 @@ impl Preset {
         }
     }
 
-    /// The size it names.
-    pub fn size(self) -> (u32, u32) {
-        reframe_dither::preset_size(self.name()).expect("every preset names a size the pipeline knows")
+    /// The aspect ratio it names, as `width:height`.
+    pub fn ratio(self) -> (u32, u32) {
+        reframe_dither::preset_ratio(self.name()).expect("every preset names a ratio the pipeline knows")
     }
 }
 
@@ -135,11 +135,14 @@ pub struct DitherParams {
     pub bayer_size: u32,
     /// Scales the Bayer threshold amplitude. Ordered dithering only.
     pub threshold_scale: f64,
-    /// Working width, used unless `resize` is false or `preset` names a size.
+    /// Working width, used unless `resize` is false. A `preset` reshapes it rather than replacing it.
     pub width: u32,
-    /// Working height, used unless `resize` is false or `preset` names a size.
+    /// Working height, used unless `resize` is false. A `preset` reshapes it rather than replacing it.
     pub height: u32,
-    /// A named working size, which takes `width` and `height`'s place.
+    /// A named aspect ratio, fitted inside `width`x`height`.
+    ///
+    /// It picks the shape and the pair still picks the scale, so a request says how many pixels it wants dithered
+    /// whichever preset it names.
     ///
     /// Left out of `GET /api/options` when unset, where the `presets` list says what the names are instead.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -253,10 +256,13 @@ impl DitherParams {
 
     /// The size to dither at, or `None` when the source resolution is kept.
     ///
-    /// A preset takes `width` and `height`'s place rather than being combined with them.
+    /// A preset reshapes `width`x`height` rather than replacing it: the largest rectangle of the preset's ratio that
+    /// fits inside the pair, which is turned over first when the ratio disagrees with it. So `preset=panel-portrait`
+    /// against the default 600x400 is the panel's own 400x600, and either way the result is never larger than the
+    /// dimensions the request already had checked.
     pub fn working_size(self) -> Option<(u32, u32)> {
         self.resize.then(|| match self.preset {
-            Some(preset) => preset.size(),
+            Some(preset) => reframe_dither::ratio_size((self.width, self.height), preset.ratio()),
             None => (self.width, self.height),
         })
     }
@@ -403,9 +409,20 @@ mod tests {
     }
 
     #[test]
-    fn every_preset_names_a_size_the_api_can_serve() {
+    fn every_preset_names_a_ratio_the_api_can_serve() {
         for preset in Preset::ALL {
-            let (width, height) = preset.size();
+            let (width, height) = preset.ratio();
+            assert!(width > 0 && height > 0, "{} has a zero side", preset.name());
+
+            // Whatever the ratio, what it resolves to is inside what `width` and `height` already had checked, so a
+            // preset can never carry a request past the dimension limit.
+            let params = DitherParams {
+                preset: Some(preset),
+                width: MAX_DIMENSION,
+                height: MAX_DIMENSION,
+                ..Default::default()
+            };
+            let (width, height) = params.working_size().expect("resize is on");
             assert!(
                 (1..=MAX_DIMENSION).contains(&width) && (1..=MAX_DIMENSION).contains(&height),
                 "{} is {width}x{height}, outside what the API accepts",
@@ -422,23 +439,43 @@ mod tests {
             );
         }
 
-        assert_eq!(Preset::InstagramStory.size(), (1080, 1920));
-        assert_eq!(Preset::Panel.size(), reframe_dither::DISPLAY_IMAGE_SIZE);
+        assert_eq!(Preset::InstagramStory.ratio(), (9, 16));
+        assert_eq!(Preset::Panel.ratio(), (3, 2));
     }
 
     #[test]
-    fn a_preset_takes_the_place_of_width_and_height() {
+    fn a_preset_reshapes_width_and_height_rather_than_replacing_them() {
         let params = DitherParams {
             preset: Some(Preset::InstagramPortrait),
             width: 320,
             height: 240,
             ..Default::default()
         };
-        assert_eq!(params.working_size(), Some((1080, 1350)));
+        // 4:5 turns the pair over and then fits inside it, so the scale is still the one that was asked for.
+        assert_eq!(params.working_size(), Some((240, 300)));
 
         // Without one, the pair is used as it was sent.
-        let params = DitherParams { preset: None, ..params };
-        assert_eq!(params.working_size(), Some((320, 240)));
+        assert_eq!(DitherParams { preset: None, ..params }.working_size(), Some((320, 240)));
+
+        // The panel entries against the default pair land on the layouts `/api/buffer` packs.
+        let panel = |preset| {
+            DitherParams {
+                preset: Some(preset),
+                ..Default::default()
+            }
+            .working_size()
+        };
+        assert_eq!(panel(Preset::Panel), Some(reframe_dither::DISPLAY_IMAGE_SIZE));
+        assert_eq!(panel(Preset::PanelPortrait), Some(reframe_dither::DISPLAY_PANEL_SIZE));
+
+        // And a bigger pair buys more pixels of the same shape.
+        let bigger = DitherParams {
+            preset: Some(Preset::InstagramStory),
+            width: 1080,
+            height: 1080,
+            ..Default::default()
+        };
+        assert_eq!(bigger.working_size(), Some((607, 1080)));
     }
 
     #[test]

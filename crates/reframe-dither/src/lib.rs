@@ -6,9 +6,8 @@
 //!
 //! # Pipeline
 //!
-//! 1. Resize to the panel's 600x400 landscape working size ([`resize`]).
-//!    [`FitOptions`] can keep a portrait photo in the 400x600 transpose
-//!    instead, and crop rather than stretch whatever ratio is left over.
+//! 1. Resize to the panel's 600x400 landscape working size ([`resize`]). [`FitOptions`] can keep a portrait photo in
+//!    the 400x600 transpose instead, and crop rather than stretch whatever ratio is left over.
 //! 2. Boost brightness, then colour ([`enhance`]).
 //! 3. Dither to the 7-slot panel palette ([`dither`]).
 //! 4. Rotate to portrait and pack two 4-bit codes per byte ([`display`]).
@@ -50,8 +49,8 @@ pub use display::{DISPLAY_PANEL_SIZE, Orientation, dither_to_display_buffer, img
 pub use dither::{DitherMethod, DitherOptions, OrderedLut, apply_dithering};
 pub use panel::PanelPalette;
 pub use resize::{
-    CropOrigin, DISPLAY_IMAGE_SIZE, FitOptions, MAX_CROP_ZOOM, SIZE_PRESETS, cover_rect, fitted_rect, fitted_size,
-    orient_target, preset_names, preset_size, resize_cropped, resize_image, resize_to_fit, scale_nearest,
+    CropOrigin, DISPLAY_IMAGE_SIZE, FitOptions, MAX_CROP_ZOOM, RATIO_PRESETS, cover_rect, fitted_rect, fitted_size,
+    orient_target, preset_names, preset_ratio, ratio_size, resize_cropped, resize_image, resize_to_fit, scale_nearest,
 };
 
 /// Re-exported so callers can build inputs without depending on `image` directly.

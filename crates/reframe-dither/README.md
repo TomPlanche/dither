@@ -65,15 +65,18 @@ reframe-dither photo.jpg -m none --crop --crop-from 0,600
 
 ```bash
 reframe-dither photo.jpg --preset instagram-story --crop --crop-from 0,200 -v
-# photo.jpg (1536x2048) -> photo_dithered.png (1080x1920) in 136ms
+# photo.jpg (1536x2048) -> photo_dithered.png (337x600) in 24ms
 #   crop: 1039x1848 from 0,200
 ```
 
-A size a platform expects, rather than the panel's:
+A shape a platform expects, rather than the panel's, at whatever size `--size` asks for:
 
 ```bash
 reframe-dither photo.jpg --preset instagram-story --crop
-# 1080x1920, cropped to 9:16 rather than squeezed into it
+# 337x600, cropped to 9:16 rather than squeezed into it
+
+reframe-dither photo.jpg --preset instagram-story --crop --size 1080x1080
+# 607x1080, the same 9:16 with the pixels to post it at
 ```
 
 Also emit the packed frame buffer, ready to hand to `epd.display()`:
@@ -94,11 +97,11 @@ reframe-dither photo.jpg --buffer
 | `--color <F>` | `1.4` | Colour intensity multiplier applied before dithering |
 | `--bayer-size <N>` | `4` | Bayer matrix size: 2, 4 or 8. Ordered only |
 | `--threshold-scale <F>` | `1.0` | Scales the Bayer threshold amplitude. Ordered only |
-| `--size <WxH>` | `600x400` | Working size |
-| `--preset <NAME>` | none | Working size by name, from the table below. Cannot be given with `--size` |
+| `--size <WxH>` | `600x400` | Working size. With `--preset` it is the box the ratio is fitted inside |
+| `--preset <NAME>` | none | Aspect ratio by name, from the table below. Reshapes `--size` rather than replacing it |
 | `--no-resize` | off | Dither at the source resolution |
-| `--keep-orientation` | off | Resize a portrait photo to the transpose of `--size`, so it stays portrait |
-| `--crop` | off | Crop to `--size`'s aspect ratio instead of stretching the photo into it |
+| `--keep-orientation` | off | Resize a portrait photo to the transpose of the working size, so it stays portrait |
+| `--crop` | off | Crop to the working size's aspect ratio instead of stretching the photo into it |
 | `--crop-from <WHERE>` | `center` | Which part the crop keeps: `center`, `top`, `bottom`, `left`, `right`, or a corner as `X,Y`. Needs `--crop` |
 | `--crop-zoom <F>` | `1.0` | `1.0` to `10.0`. Above 1.0 the crop keeps a proportionally smaller rectangle. Needs `--crop`. Not needed with a corner |
 | `--upscale-2x` | off | Nearest-neighbour doubling, matching the dashboard export |
@@ -110,19 +113,23 @@ The defaults mirror the `processing` section of `settings.example.json`.
 
 ### Presets
 
-`--preset` names a working size, so the pixel counts do not have to be remembered. Only the two panel entries can be packed into a frame buffer; the rest are there for a dithered photo that is going somewhere other than the panel.
+`--preset` names an aspect ratio, so the shapes do not have to be worked out by hand. It does not replace `--size`: the largest rectangle of that ratio that fits inside it is what gets dithered, so the preset picks the shape and `--size` still picks the scale. The rest of the table is there for a dithered photo that is going somewhere other than the panel.
 
-| `--preset` value | Size | What it is |
-| --- | --- | --- |
-| `panel` | 600x400 | The default working size, and what `--buffer` expects |
-| `panel-portrait` | 400x600 | The panel's own portrait layout |
-| `instagram-post` | 1080x1080 | Square post |
-| `instagram-portrait` | 1080x1350 | 4:5, the tallest post the feed takes |
-| `instagram-landscape` | 1080x566 | 1.91:1 |
-| `instagram-story` | 1080x1920 | 9:16, stories and reels |
-| `iphone` | 4032x3024 | 4:3, the iPhone's default photo size |
+| `--preset` value | Ratio | Inside the default 600x400 | What it is |
+| --- | --- | --- | --- |
+| `panel` | 3:2 | 600x400 | The default working shape, and what `--buffer` expects |
+| `panel-portrait` | 2:3 | 400x600 | The panel's own portrait layout |
+| `instagram-post` | 1:1 | 400x400 | Square post |
+| `instagram-portrait` | 4:5 | 400x500 | The tallest post the feed takes |
+| `instagram-landscape` | 191:100 | 600x314 | 1.91:1 |
+| `instagram-story` | 9:16 | 337x600 | Stories and reels |
+| `iphone` | 4:3 | 533x400 | The iPhone's default photo shape |
 
-A preset names one orientation, and `--keep-orientation` transposes whichever one is asked for: `--preset iphone --keep-orientation` dithers a portrait photo at 3024x4032. Add `--crop` and nothing is stretched. The large presets are real work rather than a relabelling, since the dither runs at the size asked for: `iphone` takes about 750 ms against 60 ms for `panel`.
+`--size` is turned over first when the ratio disagrees with it, so a portrait ratio is not squeezed into the landscape default's short side: `--preset panel-portrait` against 600x400 is the panel's own 400x600, not 266x400. That is what keeps both panel entries packable by `--buffer`.
+
+A preset names one orientation, and `--keep-orientation` transposes whichever one is asked for: `--preset iphone --keep-orientation` dithers a portrait photo at 400x533. Add `--crop` and nothing is stretched.
+
+What a run costs follows `--size` rather than the name, since that is what decides how many pixels get dithered: any preset against the default 600x400 is the same tens of milliseconds, and `--size 4032x3024` is where the seconds go.
 
 ### Methods
 
@@ -184,7 +191,12 @@ Which part the crop keeps is `FitOptions::crop_from`, a `CropOrigin`, and its tw
 
 `resize::fitted_rect` returns the region `resize_to_fit` will read, and `resize::fitted_size` the size it will produce. Both are what `resize_to_fit` itself uses, so a caller reporting them cannot drift from what the pipeline did. `resize::cover_rect` is the geometry underneath, for a caller that wants to say what a photo will lose before running anything. Nothing is copied to crop: the region is read in place, so cropping costs the same as not cropping.
 
-The named sizes are `resize::SIZE_PRESETS`, a table of `(name, (width, height))`, with `resize::preset_size` for the lookup and `resize::preset_names` for building a picker. They are plain data, so a caller is free to ignore them and pass its own size.
+The named ratios are `resize::RATIO_PRESETS`, a table of `(name, (width, height))` where the pair is a shape rather than a pixel count, with `resize::preset_ratio` for the lookup and `resize::preset_names` for building a picker. `resize::ratio_size` turns one into a size: the largest rectangle of that ratio that fits inside the working size handed to it, which it turns over first when the ratio disagrees with it. So a preset only ever reframes a size a caller already picked, and a caller is free to ignore the table and pass its own.
+
+```rust
+let ratio = resize::preset_ratio("instagram-story").expect("a name from the table");
+let size = resize::ratio_size(resize::DISPLAY_IMAGE_SIZE, ratio); // 337x600
+```
 
 Inputs are `image::RgbImage`, so anything that crate can decode works, and `RgbImage::from_raw` takes pixels you already have.
 

@@ -98,17 +98,16 @@ struct Cli {
     #[arg(long, default_value_t = 1.0, value_name = "F")]
     threshold_scale: f64,
 
-    /// Working size, as WIDTHxHEIGHT.
+    /// Working size, as WIDTHxHEIGHT. With --preset it is the box the ratio is fitted inside.
     #[arg(long, default_value = "600x400", value_name = "WxH", value_parser = parse_size)]
     size: (u32, u32),
 
-    /// Working size by name, for the sizes a platform expects. Use instead of --size.
+    /// Aspect ratio by name, for the shapes a platform expects. Reshapes --size rather than replacing it.
     #[arg(
         long,
-        conflicts_with = "size",
         value_name = "NAME",
         value_parser = clap::builder::PossibleValuesParser::new(resize::preset_names())
-            .map(|name| resize::preset_size(&name).expect("the parser only accepts preset names")),
+            .map(|name| resize::preset_ratio(&name).expect("the parser only accepts preset names")),
     )]
     preset: Option<(u32, u32)>,
 
@@ -116,11 +115,11 @@ struct Cli {
     #[arg(long)]
     no_resize: bool,
 
-    /// Keep the photo's orientation: a portrait photo resizes to the transpose of `--size`.
+    /// Keep the photo's orientation: a portrait photo resizes to the transpose of the working size.
     #[arg(long)]
     keep_orientation: bool,
 
-    /// Crop to `--size`'s aspect ratio instead of stretching the photo into it.
+    /// Crop to the working size's aspect ratio instead of stretching the photo into it.
     #[arg(long)]
     crop: bool,
 
@@ -190,9 +189,16 @@ impl Cli {
         })
     }
 
-    /// The size to dither at: a preset if one was named, `--size` otherwise.
+    /// The size to dither at: `--size`, reshaped to `--preset`'s ratio when one was named.
+    ///
+    /// A preset only ever picks the shape, so `--size` still says how much gets dithered. It is fitted inside the pair
+    /// rather than replacing it, and the pair is turned over first when the ratio disagrees with it, so
+    /// `--preset panel-portrait` against the default 600x400 is the panel's own 400x600.
     fn working_size(&self) -> (u32, u32) {
-        self.preset.unwrap_or(self.size)
+        match self.preset {
+            Some(ratio) => resize::ratio_size(self.size, ratio),
+            None => self.size,
+        }
     }
 
     fn fit(&self) -> FitOptions {

@@ -7,8 +7,6 @@ use image::RgbImage;
 use image::imageops::{self, FilterType};
 use rayon::prelude::*;
 
-use crate::display::DISPLAY_PANEL_SIZE;
-
 /// The landscape size the pipeline dithers at.
 pub const DISPLAY_IMAGE_SIZE: (u32, u32) = (600, 400);
 
@@ -17,44 +15,65 @@ pub const DISPLAY_IMAGE_SIZE: (u32, u32) = (600, 400);
 /// Past this the kept rectangle is a stamp being blown up to the working size, which the resize can only blur.
 pub const MAX_CROP_ZOOM: f32 = 10.0;
 
-/// Working sizes that go by a name, for a caller that would rather not carry the pixel counts around.
+/// Aspect ratios that go by a name, for a caller that would rather not work the shape out itself.
 ///
-/// The two panel entries are the layouts the frame buffer takes, and are the only ones [`crate::display`] can pack. The
-/// rest are what the platforms serve their images at, so a dithered photo can be posted without something else
-/// resampling it and smearing the dither pattern on the way.
+/// A preset names a shape, never a pixel count. [`ratio_size`] fits it inside whatever working size was asked for, so
+/// how much to dither stays the caller's to pick and a preset only ever reframes it.
+///
+/// The two panel entries are the layouts the frame buffer takes, and against the pipeline's own 600x400 they land on
+/// it exactly, which is what [`crate::display`] can pack. The rest are the shapes the platforms crop to, so a dithered
+/// photo can be posted without something else reframing it.
 ///
 /// A preset names one orientation. The other one is [`FitOptions::keep_orientation`], which transposes whichever of
-/// these is asked for: `iphone` on a portrait photo dithers at 3024x4032.
-pub const SIZE_PRESETS: [(&str, (u32, u32)); 7] = [
-    // The pipeline's own default, and the panel's portrait layout.
-    ("panel", DISPLAY_IMAGE_SIZE),
-    ("panel-portrait", DISPLAY_PANEL_SIZE),
-    // Instagram serves 1080 wide, whatever the shape.
-    ("instagram-post", (1080, 1080)),
-    ("instagram-portrait", (1080, 1350)),
-    ("instagram-landscape", (1080, 566)),
-    ("instagram-story", (1080, 1920)),
+/// these is asked for: `iphone` on a portrait photo dithers at 3:4.
+pub const RATIO_PRESETS: [(&str, (u32, u32)); 7] = [
+    // The panel's two layouts, which 600x400 and 400x600 are the pixel counts of.
+    ("panel", (3, 2)),
+    ("panel-portrait", (2, 3)),
+    ("instagram-post", (1, 1)),
+    ("instagram-portrait", (4, 5)),
+    // 1.91:1, which the feed states in decimals rather than whole sides.
+    ("instagram-landscape", (191, 100)),
+    ("instagram-story", (9, 16)),
     // The iPhone's default 4:3 photo.
-    ("iphone", (4032, 3024)),
+    ("iphone", (4, 3)),
 ];
 
-/// The size a preset names, or `None` when nothing goes by that name.
-pub fn preset_size(name: &str) -> Option<(u32, u32)> {
-    SIZE_PRESETS
+/// The aspect ratio a preset names, or `None` when nothing goes by that name.
+pub fn preset_ratio(name: &str) -> Option<(u32, u32)> {
+    RATIO_PRESETS
         .iter()
         .find(|(preset, _)| *preset == name)
-        .map(|(_, size)| *size)
+        .map(|(_, ratio)| *ratio)
 }
 
-/// The preset names, in the order [`SIZE_PRESETS`] lists them.
-pub const fn preset_names() -> [&'static str; SIZE_PRESETS.len()] {
-    let mut names = [""; SIZE_PRESETS.len()];
+/// The preset names, in the order [`RATIO_PRESETS`] lists them.
+pub const fn preset_names() -> [&'static str; RATIO_PRESETS.len()] {
+    let mut names = [""; RATIO_PRESETS.len()];
     let mut i = 0;
-    while i < SIZE_PRESETS.len() {
-        names[i] = SIZE_PRESETS[i].0;
+    while i < RATIO_PRESETS.len() {
+        names[i] = RATIO_PRESETS[i].0;
         i += 1;
     }
     names
+}
+
+/// The largest `ratio`-shaped size that fits inside `bounds`.
+///
+/// This is what a preset resolves to: the ratio picks the shape and `bounds` picks the scale, so the working size a
+/// caller asked for still says how many pixels get dithered.
+///
+/// `bounds` is turned over first when the ratio disagrees with it, which is what keeps a portrait ratio against a
+/// landscape working size from being squeezed into its short side: `panel-portrait` inside 600x400 is the panel's own
+/// 400x600, not 266x400. A caller that wants the photo's orientation rather than the ratio's has
+/// [`FitOptions::keep_orientation`], which transposes the result the same way.
+///
+/// A zero side leaves nothing to fit, so `bounds` comes back unchanged.
+pub fn ratio_size(bounds: (u32, u32), ratio: (u32, u32)) -> (u32, u32) {
+    if bounds.0 == 0 || bounds.1 == 0 || ratio.0 == 0 || ratio.1 == 0 {
+        return bounds;
+    }
+    ratio_fit(orient_target(ratio, bounds), ratio)
 }
 
 /// How a photo that does not share the working size's shape is made to fit it.
@@ -390,6 +409,7 @@ fn box_reduce(image: &RgbImage, rect: (u32, u32, u32, u32), factor: u32) -> RgbI
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::display::DISPLAY_PANEL_SIZE;
 
     #[test]
     fn resize_to_the_same_size_is_a_no_op() {
@@ -760,22 +780,60 @@ mod tests {
     }
 
     #[test]
-    fn every_preset_names_one_usable_size() {
-        for (name, (width, height)) in SIZE_PRESETS {
-            assert!(width > 0 && height > 0, "{name} is empty");
-            assert_eq!(preset_size(name), Some((width, height)));
-            // One name per size table entry, so a lookup is never ambiguous.
+    fn every_preset_names_one_usable_ratio() {
+        for (name, (width, height)) in RATIO_PRESETS {
+            assert!(width > 0 && height > 0, "{name} has a zero side");
+            assert_eq!(preset_ratio(name), Some((width, height)));
+            // One name per table entry, so a lookup is never ambiguous.
             assert_eq!(
-                SIZE_PRESETS.iter().filter(|(other, _)| *other == name).count(),
+                RATIO_PRESETS.iter().filter(|(other, _)| *other == name).count(),
                 1,
                 "{name} appears twice"
             );
         }
 
-        assert_eq!(preset_size("panel"), Some(DISPLAY_IMAGE_SIZE));
-        assert_eq!(preset_size("panel-portrait"), Some(DISPLAY_PANEL_SIZE));
-        assert_eq!(preset_size("instagram-reel"), None);
-        assert_eq!(preset_names().len(), SIZE_PRESETS.len());
+        assert_eq!(preset_ratio("panel"), Some((3, 2)));
+        assert_eq!(preset_ratio("instagram-story"), Some((9, 16)));
+        assert_eq!(preset_ratio("instagram-reel"), None);
+        assert_eq!(preset_names().len(), RATIO_PRESETS.len());
+    }
+
+    #[test]
+    fn a_preset_reshapes_the_working_size_rather_than_replacing_it() {
+        // The shape comes from the preset, the scale from the size it is fitted inside.
+        let sized = |name: &str, bounds| ratio_size(bounds, preset_ratio(name).expect("the preset exists"));
+        for (name, expected) in [
+            ("panel", DISPLAY_IMAGE_SIZE),
+            ("panel-portrait", DISPLAY_PANEL_SIZE),
+            ("instagram-post", (400, 400)),
+            ("instagram-portrait", (400, 500)),
+            ("instagram-landscape", (600, 314)),
+            ("instagram-story", (337, 600)),
+            ("iphone", (533, 400)),
+        ] {
+            assert_eq!(sized(name, DISPLAY_IMAGE_SIZE), expected, "{name} landed wrong");
+        }
+
+        // The same names against a larger working size cost more pixels and keep their shape.
+        assert_eq!(sized("instagram-story", (1080, 1080)), (607, 1080));
+        assert_eq!(sized("iphone", (1080, 1080)), (1080, 810));
+
+        // Whatever the pair, the result is inside the bounds it was given, or inside their transpose when the ratio
+        // turned them over.
+        for bounds in [(600, 400), (1080, 1080), (37, 4000), (4096, 2160), (1, 1)] {
+            for (name, ratio) in RATIO_PRESETS {
+                let (width, height) = ratio_size(bounds, ratio);
+                let room = orient_target(ratio, bounds);
+                assert!(
+                    width <= room.0 && height <= room.1 && width > 0 && height > 0,
+                    "{name} in {bounds:?} gave {width}x{height}"
+                );
+            }
+        }
+
+        // Nothing to fit leaves the bounds alone rather than collapsing them.
+        assert_eq!(ratio_size((600, 400), (0, 3)), (600, 400));
+        assert_eq!(ratio_size((0, 400), (3, 2)), (0, 400));
     }
 
     #[test]
@@ -787,11 +845,20 @@ mod tests {
             ..Default::default()
         };
 
-        // `iphone` is landscape, so a portrait photo dithers at its transpose.
-        let target = preset_size("iphone").expect("the preset exists");
-        assert_eq!(orient_target(portrait.dimensions(), target), (3024, 4032));
+        // `iphone` is landscape, so a portrait photo dithers at the transpose of what it resolved to.
+        let target = ratio_size(DISPLAY_IMAGE_SIZE, preset_ratio("iphone").expect("the preset exists"));
+        assert_eq!(target, (533, 400));
+        assert_eq!(resize_to_fit(&portrait, target, fit).dimensions(), (400, 533));
 
-        let story = preset_size("instagram-story").expect("the preset exists");
+        // Turning the ratio over instead lands on the same size, so which end the transpose happens at does not matter.
+        let turned = ratio_size(DISPLAY_IMAGE_SIZE, (3, 4));
+        assert_eq!(turned, (400, 533));
+
+        // And a portrait photo against a portrait preset is already the right way round.
+        let story = ratio_size(
+            DISPLAY_IMAGE_SIZE,
+            preset_ratio("instagram-story").expect("the preset exists"),
+        );
         assert_eq!(resize_to_fit(&portrait, story, fit).dimensions(), story);
     }
 

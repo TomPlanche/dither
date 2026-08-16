@@ -91,9 +91,9 @@ pub async fn options(State(config): State<Arc<Config>>) -> Json<OptionsBody> {
         bayer_sizes: [2, 4, 8],
         presets: Preset::ALL
             .into_iter()
-            .map(|preset| PresetSize {
+            .map(|preset| PresetRatio {
                 name: preset.name(),
-                size: preset.size(),
+                ratio: preset.ratio(),
             })
             .collect(),
         defaults,
@@ -117,17 +117,20 @@ pub struct OptionsBody {
     methods: [Method; 7],
     formats: [Format; 2],
     bayer_sizes: [u32; 3],
-    presets: Vec<PresetSize>,
+    presets: Vec<PresetRatio>,
     defaults: DitherParams,
     limits: Limits,
     panel: Panel,
 }
 
-/// A `preset` name and the size it stands for, so a client can label its own picker.
+/// A `preset` name and the `width:height` ratio it stands for, so a client can label its own picker.
+///
+/// A ratio rather than a size, because the size a preset comes out at depends on the `width` and `height` it is fitted
+/// inside. `x-image-size` reports what a given request landed on.
 #[derive(Serialize)]
-struct PresetSize {
+struct PresetRatio {
     name: &'static str,
-    size: (u32, u32),
+    ratio: (u32, u32),
 }
 
 #[derive(Serialize)]

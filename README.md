@@ -45,7 +45,7 @@ Defaults, accepted values, limits and the panel palette. The `defaults` object u
   "methods": ["floyd-steinberg", "atkinson", "stucki", "burkes", "jarvis", "ordered", "none"],
   "formats": ["indexed", "rgb"],
   "bayer_sizes": [2, 4, 8],
-  "presets": [{ "name": "panel", "size": [600, 400] }, { "name": "instagram-story", "size": [1080, 1920] }, "..."],
+  "presets": [{ "name": "panel", "ratio": [3, 2] }, { "name": "instagram-story", "ratio": [9, 16] }, "..."],
   "defaults": { "method": "floyd-steinberg", "saturation": 0.6, "brightness": 1.1, "color": 1.4, "bayer_size": 4, "threshold_scale": 1.0, "width": 600, "height": 400, "resize": true, "keep_orientation": false, "crop": false, "scale": 1, "format": "indexed" },
   "limits": { "max_upload_bytes": 26214400, "max_dimension": 4096, "max_scale": 4, "max_source_pixels": 50000000, "max_crop_zoom": 10.0 },
   "panel": { "image_size": [600, 400], "panel_size": [400, 600], "palette": ["#221c22", "#ffffff", "#e2d82a", "#c32b2d", "#221c22", "#004cff", "#189c22"] }
@@ -87,7 +87,7 @@ Settings ride in the query string on both POST routes. Every one is optional.
 | `threshold_scale` | `1.0` | `0.0` to `5.0`. Ordered dithering only. |
 | `width` | `600` | `1` to `4096` |
 | `height` | `400` | `1` to `4096` |
-| `preset` | none | A named working size, which takes `width` and `height`'s place. See the table below. |
+| `preset` | none | A named aspect ratio, fitted inside `width`x`height`. See the table below. |
 | `resize` | `true` | `false` dithers at the source resolution instead. |
 | `keep_orientation` | `false` | `true` transposes `width`x`height` for a photo that disagrees with it, so a portrait upload stays portrait. |
 | `crop` | `false` | `true` crops to `width`x`height`'s aspect ratio instead of stretching the photo into it. |
@@ -116,19 +116,23 @@ Both POST routes answer with `x-crop-rect: X,Y,WIDTH,HEIGHT`, the part of the up
 
 ### Presets
 
-`preset` names a working size instead of spelling out `width` and `height`. `GET /api/options` carries the same table under `presets`, so a picker can be built from the API rather than hardcoded.
+`preset` names an aspect ratio instead of working the shape out by hand. It does not replace `width` and `height`: the largest rectangle of that ratio that fits inside the pair is what gets dithered, so the preset picks the shape and the pair still picks the scale. `GET /api/options` carries the same table under `presets`, so a picker can be built from the API rather than hardcoded.
 
-| `preset` value | Size | What it is |
-| --- | --- | --- |
-| `panel` | 600x400 | The default working size, and the one `/api/buffer` expects |
-| `panel-portrait` | 400x600 | The panel's own portrait layout |
-| `instagram-post` | 1080x1080 | Square post |
-| `instagram-portrait` | 1080x1350 | 4:5, the tallest post the feed takes |
-| `instagram-landscape` | 1080x566 | 1.91:1 |
-| `instagram-story` | 1080x1920 | 9:16, stories and reels |
-| `iphone` | 4032x3024 | 4:3, the iPhone's default photo size |
+| `preset` value | Ratio | Inside the default 600x400 | What it is |
+| --- | --- | --- | --- |
+| `panel` | 3:2 | 600x400 | The default working shape, and the one `/api/buffer` expects |
+| `panel-portrait` | 2:3 | 400x600 | The panel's own portrait layout |
+| `instagram-post` | 1:1 | 400x400 | Square post |
+| `instagram-portrait` | 4:5 | 400x500 | The tallest post the feed takes |
+| `instagram-landscape` | 191:100 | 600x314 | 1.91:1 |
+| `instagram-story` | 9:16 | 337x600 | Stories and reels |
+| `iphone` | 4:3 | 533x400 | The iPhone's default photo shape |
 
-A preset names one orientation, and `keep_orientation=true` transposes it for a photo of the other one, so `preset=iphone&keep_orientation=true&crop=true` returns 3024x4032 undistorted. An unknown name is a 400 listing the ones that work. The size asked for is the size dithered at, so the large presets cost real time: about 750 ms for `iphone` against 60 ms for `panel`. Only the two panel entries can be packed by `/api/buffer`.
+The pair is turned over first when the ratio disagrees with it, so a portrait ratio is not squeezed into the landscape default's short side: `preset=panel-portrait` against 600x400 is the panel's own 400x600, not 266x400. That is what keeps both panel entries packable by `/api/buffer`.
+
+Since a preset is fitted inside `width` and `height` rather than carrying its own pixel count, asking for more resolution is a matter of asking for a bigger pair: `preset=instagram-story` alone returns 337x600, and `preset=instagram-story&width=1080&height=1080` returns 607x1080 of the same shape. What a request costs therefore follows the pair, not the name. `x-image-size` reports what it landed on.
+
+A preset names one orientation, and `keep_orientation=true` transposes it for a photo of the other one, so `preset=iphone&keep_orientation=true&crop=true` returns 400x533 undistorted. An unknown name is a 400 listing the ones that work.
 
 ### Errors
 
@@ -173,6 +177,7 @@ export type DitherParams = {
   threshold_scale: number;
   width: number;
   height: number;
+  /** An aspect ratio, fitted inside `width` x `height` rather than replacing it. */
   preset: DitherPreset;
   resize: boolean;
   keep_orientation: boolean;
