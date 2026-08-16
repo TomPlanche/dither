@@ -361,6 +361,38 @@ async fn the_panel_refuses_an_undithered_image() {
 }
 
 #[tokio::test]
+async fn resize_takes_a_fraction_of_the_photos_own_size() {
+    // The 120x40 source at three quarters of each side, framing untouched.
+    let response = call(post("/api/dither?method=none&resize=0.75", "image/png", banded_png())).await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["x-image-size"], "90x30");
+    assert_eq!(response.headers()["x-crop-rect"], "0,0,120,40");
+
+    // With a crop it is a fraction of what the crop kept, not of the photo: 0.5 of the 40x40 middle.
+    let uri = "/api/dither?method=none&resize=0.5&width=40&height=40&crop=true";
+    let response = call(post(uri, "image/png", banded_png())).await;
+    assert_eq!(response.headers()["x-crop-rect"], "40,0,40,40");
+    assert_eq!(response.headers()["x-image-size"], "20x20");
+
+    // `true` still fits the working size, and `false` still keeps the source resolution.
+    let response = call(post("/api/dither?method=none&resize=true", "image/png", banded_png())).await;
+    assert_eq!(response.headers()["x-image-size"], "600x400");
+    let response = call(post("/api/dither?method=none&resize=false", "image/png", banded_png())).await;
+    assert_eq!(response.headers()["x-image-size"], "120x40");
+
+    // Outside what a fraction can mean, it is a 400 naming the range.
+    let response = call(post("/api/dither?resize=1.5", "image/png", banded_png())).await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let json: serde_json::Value = serde_json::from_slice(&body_bytes(response).await).expect("the error is JSON");
+    let error = json["error"].as_str().expect("error is a string");
+    assert!(
+        error.contains("between 0 and 1"),
+        "the message should give the range: {error}"
+    );
+}
+
+#[tokio::test]
 async fn resize_false_still_crops_it_just_does_not_scale() {
     // The 120x40 source, framed square from 20 rows down: 20x20 of its own pixels, not scaled to 40x40.
     let uri = "/api/dither?method=none&resize=false&width=40&height=40&crop=true&crop_from=0,20";

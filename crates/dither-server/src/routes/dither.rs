@@ -19,7 +19,9 @@ use serde::Serialize;
 
 use crate::config::Config;
 use crate::error::ApiError;
-use crate::params::{DitherParams, Format, MAX_DIMENSION, MAX_SCALE, MAX_SOURCE_PIXELS, Method, Params, Preset};
+use crate::params::{
+    DitherParams, Format, MAX_DIMENSION, MAX_SCALE, MAX_SOURCE_PIXELS, Method, Params, Preset, Resize,
+};
 
 /// Size of the returned image, as `WIDTHxHEIGHT`.
 pub const X_IMAGE_SIZE: &str = "x-image-size";
@@ -253,20 +255,17 @@ fn prepare(source: &[u8], params: DitherParams) -> Result<(RgbImage, String), Ap
     }
 
     let fit = params.fit();
-    let (working, (x, y, kept_w, kept_h)) = match params.working_size() {
-        Some(size) => (
-            resize::resize_to_fit(&photo, size, fit),
-            resize::fitted_rect((width, height), size, fit),
-        ),
-        // `resize=false` keeps the source pixels, which is no reason to stop framing them.
-        None if fit.crop => {
-            let ratio = params.working_ratio();
-            (
-                resize::crop_to_fit(&photo, ratio, fit),
-                resize::fitted_rect((width, height), ratio, fit),
-            )
-        },
-        None => (photo, (0, 0, width, height)),
+
+    // The shape the framing is measured against, which is the working size itself when scaling to it.
+    let target = params.working_size().unwrap_or_else(|| params.working_ratio());
+    let (x, y, kept_w, kept_h) = resize::fitted_rect((width, height), target, fit);
+
+    let working = match params.resize {
+        Resize::Fit => resize::resize_to_fit(&photo, target, fit),
+        Resize::Factor(factor) => resize::scale_to_fit(&photo, target, fit, factor),
+        // Keeping the source pixels is no reason to stop framing them.
+        Resize::Keep if fit.crop => resize::crop_to_fit(&photo, target, fit),
+        Resize::Keep => photo,
     };
 
     Ok((working, format!("{x},{y},{kept_w},{kept_h}")))

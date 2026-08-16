@@ -88,7 +88,7 @@ Settings ride in the query string on both POST routes. Every one is optional.
 | `width` | `600` | `1` to `4096` |
 | `height` | `400` | `1` to `4096` |
 | `preset` | none | A named aspect ratio, fitted inside `width`x`height`. See the table below. |
-| `resize` | `true` | `false` dithers at the source resolution instead. It governs the scaling only: `crop` still frames the photo, to `width`x`height`'s shape or the preset's. |
+| `resize` | `true` | `true` scales to the working size, `false` keeps the source resolution, and a fraction between 0 and 1 takes that much of each side. It governs the scaling only: `crop` still frames the photo, to `width`x`height`'s shape or the preset's. |
 | `keep_orientation` | `false` | `true` transposes `width`x`height` for a photo that disagrees with it, so a portrait upload stays portrait. |
 | `crop` | `false` | `true` crops to `width`x`height`'s aspect ratio instead of stretching the photo into it. |
 | `crop_from` | `center` | Which part the crop keeps: `center`, `top`, `bottom`, `left`, `right`, or a corner as `X,Y`. Needs `crop=true`. |
@@ -100,7 +100,15 @@ An unknown parameter is an error rather than a silent no-op, so a typo shows up 
 
 `keep_orientation` and `crop` are what an upload of any shape needs to come out undistorted: the first picks the panel layout the photo is closer to, the second trims the long side rather than stretching the short one. Neither changes the size that comes back, so a client can keep reading it off `x-image-size`.
 
-`resize=false` and `crop=true` compose: the first says do not scale, the second says how to frame, and together they hand back the framed region at the upload's own resolution. A 1536x2048 photo with `preset=instagram-story&crop=true&resize=false` comes back 1152x2048, not 1080x1920, and `x-crop-rect` reports the region either way.
+`resize` answers one question, how much smaller the photo should come back, three ways:
+
+| `resize` | what it does |
+| --- | --- |
+| `true` | Scales to the working size: `width`x`height`, reshaped by any `preset`. |
+| `false` | Keeps the source resolution. |
+| `0.75` | Takes three quarters of each side of whatever the framing kept, so a quarter off the photo. |
+
+It governs the scaling alone, so `crop` keeps framing under all three: the first says how much smaller, the second says what shape. A 1536x2048 photo with `preset=instagram-story&crop=true` comes back 1152x2048 under `resize=false` and 864x1536 under `resize=0.75`, against 337x600 under `resize=true`. `x-crop-rect` reports the region that was read whichever it is.
 
 `method=none` skips the dither and returns the photo resized and cropped, and nothing else. It is for checking the framing, where the dither pattern is in the way. `resize`, `preset`, `crop`, `crop_from`, `crop_zoom`, `scale` and the `x-crop-rect` header all work the same; the palette settings have nothing to act on, and `format` has no palette to index, so the result is always a plain RGB PNG. `POST /api/buffer` refuses it with a 400, since the panel takes palette slots.
 
@@ -181,7 +189,8 @@ export type DitherParams = {
   height: number;
   /** An aspect ratio, fitted inside `width` x `height` rather than replacing it. */
   preset: DitherPreset;
-  resize: boolean;
+  /** true fits the working size, false keeps the source resolution, 0 to 1 is a fraction of it. */
+  resize: boolean | number;
   keep_orientation: boolean;
   crop: boolean;
   /** Needs `crop: true`. 'center' | 'top' | 'bottom' | 'left' | 'right', or a corner as `${number},${number}` */

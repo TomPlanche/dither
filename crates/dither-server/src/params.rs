@@ -111,6 +111,85 @@ impl Preset {
     }
 }
 
+/// What `resize` asks for.
+///
+/// Three answers to one question, which is how much smaller the photo should come back: the working size, nothing at
+/// all, or a fraction of what the framing kept. Whichever it is, `crop` still decides the shape, so `resize` governs
+/// the scaling alone.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Resize {
+    /// `true`: scale to `width`x`height`, reshaped by any `preset`.
+    Fit,
+    /// `false`: keep the source resolution.
+    Keep,
+    /// `0.75`: three quarters of each side of what the framing kept, so a quarter off the photo.
+    Factor(f64),
+}
+
+impl Resize {
+    /// The fraction it asks for, or `None` when it names a size instead.
+    pub fn factor(self) -> Option<f64> {
+        match self {
+            Resize::Factor(factor) => Some(factor),
+            _ => None,
+        }
+    }
+}
+
+impl Serialize for Resize {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Resize::Fit => serializer.serialize_bool(true),
+            Resize::Keep => serializer.serialize_bool(false),
+            Resize::Factor(factor) => serializer.serialize_f64(*factor),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for Resize {
+    /// Reads `true`, `false` or a number, and the same three spelled as the strings a query string carries.
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct AnyResize;
+
+        impl serde::de::Visitor<'_> for AnyResize {
+            type Value = Resize;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("true, false, or a fraction between 0 and 1")
+            }
+
+            fn visit_bool<E>(self, yes: bool) -> Result<Resize, E> {
+                Ok(if yes { Resize::Fit } else { Resize::Keep })
+            }
+
+            fn visit_f64<E>(self, factor: f64) -> Result<Resize, E> {
+                Ok(Resize::Factor(factor))
+            }
+
+            fn visit_u64<E>(self, factor: u64) -> Result<Resize, E> {
+                Ok(Resize::Factor(factor as f64))
+            }
+
+            fn visit_i64<E>(self, factor: i64) -> Result<Resize, E> {
+                Ok(Resize::Factor(factor as f64))
+            }
+
+            fn visit_str<E: serde::de::Error>(self, raw: &str) -> Result<Resize, E> {
+                match raw.trim() {
+                    "true" => Ok(Resize::Fit),
+                    "false" => Ok(Resize::Keep),
+                    number => number
+                        .parse()
+                        .map(Resize::Factor)
+                        .map_err(|_| E::custom(format!("resize must be true, false or a number, got `{raw}`"))),
+                }
+            }
+        }
+
+        deserializer.deserialize_any(AnyResize)
+    }
+}
+
 /// How to encode the PNG that comes back.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -147,8 +226,8 @@ pub struct DitherParams {
     /// Left out of `GET /api/options` when unset, where the `presets` list says what the names are instead.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub preset: Option<Preset>,
-    /// Resize to `width`x`height` first. False dithers at the source resolution.
-    pub resize: bool,
+    /// What to scale the photo to: `true` for the working size, `false` for none, or a fraction of its own size.
+    pub resize: Resize,
     /// Keep the photo's orientation: a portrait photo resizes to `height`x`width`.
     pub keep_orientation: bool,
     /// Crop to the working size's aspect ratio instead of stretching the photo into it.
@@ -184,7 +263,7 @@ impl Default for DitherParams {
             width: reframe_dither::DISPLAY_IMAGE_SIZE.0,
             height: reframe_dither::DISPLAY_IMAGE_SIZE.1,
             preset: None,
-            resize: true,
+            resize: Resize::Fit,
             keep_orientation: false,
             crop: false,
             crop_from: None,
@@ -229,6 +308,14 @@ impl DitherParams {
             )));
         }
 
+        if let Some(factor) = self.resize.factor()
+            && (!factor.is_finite() || !(0.0..=1.0).contains(&factor) || factor == 0.0)
+        {
+            return Err(ApiError::bad_request(format!(
+                "resize must be true, false, or a fraction between 0 and 1, got {factor}"
+            )));
+        }
+
         if let Some(zoom) = self.crop_zoom
             && (!zoom.is_finite() || !(1.0..=f64::from(MAX_CROP_ZOOM)).contains(&zoom))
         {
@@ -261,10 +348,8 @@ impl DitherParams {
     /// against the default 600x400 is the panel's own 400x600, and either way the result is never larger than the
     /// dimensions the request already had checked.
     pub fn working_size(self) -> Option<(u32, u32)> {
-        self.resize.then(|| match self.preset {
-            Some(preset) => reframe_dither::ratio_size((self.width, self.height), preset.ratio()),
-            None => (self.width, self.height),
-        })
+        matches!(self.resize, Resize::Fit)
+            .then(|| reframe_dither::ratio_size((self.width, self.height), self.working_ratio()))
     }
 
     /// The shape the geometry is measured against, whatever `resize` says.
@@ -522,12 +607,58 @@ mod tests {
         assert_eq!(params.fit().crop_from, CropOrigin::Center);
         assert_eq!(params.fit().crop_zoom, 1.0);
 
-        // `resize=false` drops the working size, and the flags then have nothing to act on.
-        let params = DitherParams {
-            resize: false,
-            ..params
-        };
-        assert_eq!(params.working_size(), None);
+        // Anything but `resize=true` drops the working size, and the framing then works off the shape alone.
+        for resize in [Resize::Keep, Resize::Factor(0.75)] {
+            let params = DitherParams { resize, ..params };
+            assert_eq!(params.working_size(), None);
+            assert_eq!(params.working_ratio(), (600, 400));
+        }
+    }
+
+    #[test]
+    fn resize_reads_a_flag_or_a_fraction() {
+        // What a query string carries, and what `GET /api/options` reports back.
+        for (raw, expected) in [
+            ("true", Resize::Fit),
+            ("false", Resize::Keep),
+            ("0.75", Resize::Factor(0.75)),
+            ("1", Resize::Factor(1.0)),
+        ] {
+            let params: DitherParams =
+                serde_json::from_value(serde_json::json!({ "resize": raw })).expect("the query string form parses");
+            assert_eq!(params.resize, expected, "`{raw}`");
+            assert!(params.to_options().is_ok(), "`{raw}` should be accepted");
+        }
+
+        // And the JSON forms, for a client posting the defaults back as they came.
+        assert_eq!(
+            serde_json::from_value::<DitherParams>(serde_json::json!({ "resize": true }))
+                .expect("a bool parses")
+                .resize,
+            Resize::Fit
+        );
+        assert_eq!(
+            serde_json::to_value(DitherParams::default()).expect("defaults serialise")["resize"],
+            serde_json::json!(true)
+        );
+        assert_eq!(
+            serde_json::to_value(DitherParams {
+                resize: Resize::Factor(0.75),
+                ..Default::default()
+            })
+            .expect("a factor serialises")["resize"],
+            serde_json::json!(0.75)
+        );
+
+        // A fraction outside what it can mean is refused, and so is a spelling that is neither.
+        for bad in [0.0, -0.5, 1.5, f64::NAN] {
+            let params = DitherParams {
+                resize: Resize::Factor(bad),
+                ..Default::default()
+            };
+            assert!(params.to_options().is_err(), "resize {bad} should be refused");
+        }
+        assert!(serde_json::from_value::<DitherParams>(serde_json::json!({ "resize": "half" })).is_err());
     }
 
     #[test]

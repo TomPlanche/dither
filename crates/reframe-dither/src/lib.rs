@@ -51,6 +51,7 @@ pub use panel::PanelPalette;
 pub use resize::{
     CropOrigin, DISPLAY_IMAGE_SIZE, FitOptions, MAX_CROP_ZOOM, RATIO_PRESETS, cover_rect, fitted_rect, fitted_size,
     orient_target, preset_names, preset_ratio, ratio_size, resize_cropped, resize_image, resize_to_fit, scale_nearest,
+    scale_to_fit,
 };
 
 /// Re-exported so callers can build inputs without depending on `image` directly.

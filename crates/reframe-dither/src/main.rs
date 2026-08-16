@@ -115,6 +115,10 @@ struct Cli {
     #[arg(long)]
     no_resize: bool,
 
+    /// Scale by a fraction of the source instead of to the working size: 0.75 takes a quarter off.
+    #[arg(long, conflicts_with = "no_resize", value_name = "F", value_parser = parse_factor)]
+    resize: Option<f64>,
+
     /// Keep the photo's orientation: a portrait photo resizes to the transpose of the working size.
     #[arg(long)]
     keep_orientation: bool,
@@ -162,6 +166,18 @@ fn parse_size(raw: &str) -> Result<(u32, u32), String> {
         return Err("width and height must be non-zero".into());
     }
     Ok((w, h))
+}
+
+/// The resize fraction, which is a part of the photo's own size rather than a size of its own.
+fn parse_factor(raw: &str) -> Result<f64, String> {
+    let factor: f64 = raw
+        .trim()
+        .parse()
+        .map_err(|_| format!("expected a number, got `{raw}`"))?;
+    if !factor.is_finite() || factor <= 0.0 || factor > 1.0 {
+        return Err(format!("expected a fraction between 0 and 1, got {factor}"));
+    }
+    Ok(factor)
 }
 
 /// The crop zoom, which has to be at least 1.0: below that there is nothing left inside the photo to keep.
@@ -278,17 +294,20 @@ fn process(cli: &Cli, input: &Path) -> Result<String, Box<dyn Error>> {
     let source_size = photo.dimensions();
 
     // What the crop kept, so `--verbose` can say why a coordinate did not move anything.
-    let kept = cli
-        .crop
-        .then(|| resize::fitted_rect(source_size, cli.working_ratio(), cli.fit()));
-
-    let working: RgbImage = if !cli.no_resize {
-        resize::resize_to_fit(&photo, cli.working_size(), cli.fit())
-    } else if cli.crop {
-        // `--no-resize` keeps the source pixels, which is no reason to stop framing them.
-        resize::crop_to_fit(&photo, cli.working_ratio(), cli.fit())
+    // The shape the framing is measured against, which is the working size itself when scaling to it.
+    let target = if cli.no_resize || cli.resize.is_some() {
+        cli.working_ratio()
     } else {
-        photo
+        cli.working_size()
+    };
+    let kept = cli.crop.then(|| resize::fitted_rect(source_size, target, cli.fit()));
+
+    let working: RgbImage = match cli.resize {
+        Some(factor) => resize::scale_to_fit(&photo, target, cli.fit(), factor),
+        // Keeping the source pixels is no reason to stop framing them.
+        None if cli.no_resize && cli.crop => resize::crop_to_fit(&photo, target, cli.fit()),
+        None if cli.no_resize => photo,
+        None => resize::resize_to_fit(&photo, target, cli.fit()),
     };
 
     // Packing the frame buffer runs the dither too, so only do the work once.

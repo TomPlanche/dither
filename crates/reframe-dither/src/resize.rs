@@ -218,8 +218,27 @@ pub fn fitted_size(source: (u32, u32), target: (u32, u32), fit: FitOptions) -> (
 /// ratio alone, since nothing is being fitted to its size: a 1536x2048 photo cropped to 9:16 from `0,200` comes out
 /// 1039x1848, not 1080x1920.
 pub fn crop_to_fit(image: &RgbImage, target: (u32, u32), fit: FitOptions) -> RgbImage {
+    scale_to_fit(image, target, fit, 1.0)
+}
+
+/// The part of a photo [`resize_to_fit`] would read, scaled by `factor`.
+///
+/// Between [`resize_to_fit`], which lands on a size, and [`crop_to_fit`], which lands on none: this one keeps the
+/// photo's own proportions and asks only how much smaller, so 0.75 takes three quarters of each side of whatever the
+/// crop kept. `target` is therefore read for its shape alone, the way [`crop_to_fit`] reads it.
+///
+/// A factor above 1.0 enlarges, which the triangle filter can only interpolate. The result is never empty: each side
+/// rounds to at least one pixel.
+pub fn scale_to_fit(image: &RgbImage, target: (u32, u32), fit: FitOptions, factor: f64) -> RgbImage {
     let rect = fitted_rect(image.dimensions(), target, fit);
-    resize_region(image, rect, (rect.2, rect.3))
+    let factor = if factor.is_finite() && factor > 0.0 {
+        factor
+    } else {
+        1.0
+    };
+    let scaled = |side: u32| ((f64::from(side) * factor).round() as u32).max(1);
+
+    resize_region(image, rect, (scaled(rect.2), scaled(rect.3)))
 }
 
 /// The region of the photo [`resize_to_fit`] reads, as `(x, y, width, height)`.
@@ -671,6 +690,41 @@ mod tests {
         // Ask for more than the corner leaves and the same region is scaled up to it instead.
         assert_eq!(fitted_rect(photo.dimensions(), (100, 100), fit), (50, 100, 50, 50));
         assert_eq!(resize_to_fit(&photo, (100, 100), fit).dimensions(), (100, 100));
+    }
+
+    #[test]
+    fn a_factor_shrinks_whatever_the_framing_kept() {
+        let photo = RgbImage::from_fn(100, 200, |x, y| image::Rgb([x as u8, (y / 2) as u8, 60]));
+
+        // No crop: three quarters of each side of the whole photo.
+        let plain = FitOptions::default();
+        assert_eq!(scale_to_fit(&photo, (600, 400), plain, 0.75).dimensions(), (75, 150));
+        assert_eq!(scale_to_fit(&photo, (600, 400), plain, 0.5).dimensions(), (50, 100));
+
+        // With a crop, the factor applies to the rectangle that was kept rather than to the photo.
+        let cropped = FitOptions {
+            crop: true,
+            ..Default::default()
+        };
+        let rect = fitted_rect(photo.dimensions(), (9, 16), cropped);
+        assert_eq!(rect, (0, 11, 100, 177));
+        assert_eq!(
+            scale_to_fit(&photo, (9, 16), cropped, 0.75).dimensions(),
+            (75, 133),
+            "0.75 of the 100x177 the crop kept"
+        );
+
+        // 1.0 is the crop untouched, and a factor small enough to round a side away still leaves a pixel.
+        assert_eq!(
+            crop_to_fit(&photo, (9, 16), cropped),
+            scale_to_fit(&photo, (9, 16), cropped, 1.0)
+        );
+        assert_eq!(scale_to_fit(&photo, (600, 400), plain, 0.001).dimensions(), (1, 1));
+
+        // A factor that means nothing leaves the photo at its own size.
+        for bad in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            assert_eq!(scale_to_fit(&photo, (600, 400), plain, bad).dimensions(), (100, 200));
+        }
     }
 
     #[test]
