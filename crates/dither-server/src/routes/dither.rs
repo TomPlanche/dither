@@ -252,15 +252,24 @@ fn prepare(source: &[u8], params: DitherParams) -> Result<(RgbImage, String), Ap
         )));
     }
 
-    let Some(size) = params.working_size() else {
-        return Ok((photo, format!("0,0,{width},{height}")));
+    let fit = params.fit();
+    let (working, (x, y, kept_w, kept_h)) = match params.working_size() {
+        Some(size) => (
+            resize::resize_to_fit(&photo, size, fit),
+            resize::fitted_rect((width, height), size, fit),
+        ),
+        // `resize=false` keeps the source pixels, which is no reason to stop framing them.
+        None if fit.crop => {
+            let ratio = params.working_ratio();
+            (
+                resize::crop_to_fit(&photo, ratio, fit),
+                resize::fitted_rect((width, height), ratio, fit),
+            )
+        },
+        None => (photo, (0, 0, width, height)),
     };
 
-    let (x, y, kept_w, kept_h) = resize::fitted_rect((width, height), size, params.fit());
-    Ok((
-        resize::resize_to_fit(&photo, size, params.fit()),
-        format!("{x},{y},{kept_w},{kept_h}"),
-    ))
+    Ok((working, format!("{x},{y},{kept_w},{kept_h}")))
 }
 
 /// Reads the image out of either a raw body or a multipart `image` field.

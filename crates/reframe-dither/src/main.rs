@@ -201,6 +201,14 @@ impl Cli {
         }
     }
 
+    /// The shape the geometry is measured against, whatever `--no-resize` says.
+    ///
+    /// `--no-resize` keeps the source resolution, but a crop still needs a shape to aim at, and this is it. So it means
+    /// no scaling rather than no framing, and `--crop` keeps working underneath it.
+    fn working_ratio(&self) -> (u32, u32) {
+        self.preset.unwrap_or_else(|| self.working_size())
+    }
+
     fn fit(&self) -> FitOptions {
         FitOptions {
             keep_orientation: self.keep_orientation,
@@ -270,12 +278,17 @@ fn process(cli: &Cli, input: &Path) -> Result<String, Box<dyn Error>> {
     let source_size = photo.dimensions();
 
     // What the crop kept, so `--verbose` can say why a coordinate did not move anything.
-    let kept = (!cli.no_resize && cli.crop).then(|| resize::fitted_rect(source_size, cli.working_size(), cli.fit()));
+    let kept = cli
+        .crop
+        .then(|| resize::fitted_rect(source_size, cli.working_ratio(), cli.fit()));
 
-    let working: RgbImage = if cli.no_resize {
-        photo
-    } else {
+    let working: RgbImage = if !cli.no_resize {
         resize::resize_to_fit(&photo, cli.working_size(), cli.fit())
+    } else if cli.crop {
+        // `--no-resize` keeps the source pixels, which is no reason to stop framing them.
+        resize::crop_to_fit(&photo, cli.working_ratio(), cli.fit())
+    } else {
+        photo
     };
 
     // Packing the frame buffer runs the dither too, so only do the work once.

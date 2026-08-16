@@ -212,6 +212,16 @@ pub fn fitted_size(source: (u32, u32), target: (u32, u32), fit: FitOptions) -> (
     }
 }
 
+/// The part of a photo [`resize_to_fit`] would read, kept at its own resolution.
+///
+/// The crop without the scale, for a caller that asked to keep the source pixels. `target` is then read for its aspect
+/// ratio alone, since nothing is being fitted to its size: a 1536x2048 photo cropped to 9:16 from `0,200` comes out
+/// 1039x1848, not 1080x1920.
+pub fn crop_to_fit(image: &RgbImage, target: (u32, u32), fit: FitOptions) -> RgbImage {
+    let rect = fitted_rect(image.dimensions(), target, fit);
+    resize_region(image, rect, (rect.2, rect.3))
+}
+
 /// The region of the photo [`resize_to_fit`] reads, as `(x, y, width, height)`.
 ///
 /// The whole photo unless `crop`, which is what a caller reports when it wants to say which part of an upload was
@@ -332,8 +342,9 @@ fn ratio_fit(space: (u32, u32), target: (u32, u32)) -> (u32, u32) {
 /// Scales the `(x, y, width, height)` region of a photo to `target`.
 fn resize_region(image: &RgbImage, rect: (u32, u32, u32, u32), target: (u32, u32)) -> RgbImage {
     let (x, y, width, height) = rect;
-    if (width, height) == target && rect == (0, 0, image.width(), image.height()) {
-        return image.clone();
+    if (width, height) == target {
+        // Nothing to scale, so the region is copied out as it is, which for the whole photo is a plain clone.
+        return imageops::crop_imm(image, x, y, width, height).to_image();
     }
 
     match prefilter_factor((width, height), target) {
@@ -620,6 +631,78 @@ mod tests {
             cover_rect(source, story, CropOrigin::At { x: 0, y: 200 }, 2.0),
             (0, 200, 520, 924)
         );
+    }
+
+    #[test]
+    fn a_corner_and_a_size_that_match_hand_back_the_original_pixels() {
+        // A 100x200 photo cropped from 50,100 into a 50x100 working size. The corner leaves exactly 50x100, which is
+        // the size asked for, so there is nothing to scale and the pixels come through untouched.
+        let photo = RgbImage::from_fn(100, 200, |x, y| {
+            image::Rgb([x as u8, (y / 2) as u8, ((x + y) % 251) as u8])
+        });
+        let fit = FitOptions {
+            crop: true,
+            crop_from: CropOrigin::At { x: 50, y: 100 },
+            ..Default::default()
+        };
+
+        assert_eq!(fitted_rect(photo.dimensions(), (50, 100), fit), (50, 100, 50, 100));
+
+        let out = resize_to_fit(&photo, (50, 100), fit);
+        assert_eq!(out.dimensions(), (50, 100));
+        for y in 0..100 {
+            for x in 0..50 {
+                assert_eq!(
+                    out.get_pixel(x, y),
+                    photo.get_pixel(50 + x, 100 + y),
+                    "pixel {x},{y} moved"
+                );
+            }
+        }
+
+        // The shape is what fixes the rectangle, not the size: a square target from the same corner keeps 50x50, and
+        // that too comes out pixel for pixel.
+        assert_eq!(fitted_rect(photo.dimensions(), (50, 50), fit), (50, 100, 50, 50));
+        assert_eq!(
+            resize_to_fit(&photo, (50, 50), fit).get_pixel(10, 10),
+            photo.get_pixel(60, 110)
+        );
+
+        // Ask for more than the corner leaves and the same region is scaled up to it instead.
+        assert_eq!(fitted_rect(photo.dimensions(), (100, 100), fit), (50, 100, 50, 50));
+        assert_eq!(resize_to_fit(&photo, (100, 100), fit).dimensions(), (100, 100));
+    }
+
+    #[test]
+    fn cropping_without_scaling_keeps_the_source_pixels() {
+        // A 3:4 photo framed 9:16 from 200 rows down. Only the ratio of the target is read, not its size.
+        let photo = RgbImage::from_fn(1536, 2048, |x, y| image::Rgb([(x / 8) as u8, (y / 8) as u8, 60]));
+        let fit = FitOptions {
+            crop: true,
+            crop_from: CropOrigin::At { x: 0, y: 200 },
+            ..Default::default()
+        };
+
+        let cropped = crop_to_fit(&photo, (9, 16), fit);
+        assert_eq!(cropped.dimensions(), (1039, 1848));
+        assert_eq!(
+            fitted_rect(photo.dimensions(), (9, 16), fit),
+            (0, 200, 1039, 1848),
+            "the rect a caller reports is the one that was read"
+        );
+
+        // Naming the size rather than the ratio keeps the same pixels, since only the shape is consulted.
+        assert_eq!(crop_to_fit(&photo, (1080, 1920), fit).dimensions(), (1039, 1848));
+
+        // The pixels are the source's own, not resampled: the corner is where the crop started.
+        assert_eq!(cropped.get_pixel(0, 0), photo.get_pixel(0, 200));
+        assert_eq!(cropped.get_pixel(500, 500), photo.get_pixel(500, 700));
+
+        // Scaling to the same size instead lands on 1080x1920, which is the other half of the pair.
+        assert_eq!(resize_to_fit(&photo, (1080, 1920), fit).dimensions(), (1080, 1920));
+
+        // And with no crop asked for, the photo comes back whole.
+        assert_eq!(crop_to_fit(&photo, (9, 16), FitOptions::default()), photo);
     }
 
     #[test]

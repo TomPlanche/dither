@@ -88,7 +88,7 @@ Settings ride in the query string on both POST routes. Every one is optional.
 | `width` | `600` | `1` to `4096` |
 | `height` | `400` | `1` to `4096` |
 | `preset` | none | A named aspect ratio, fitted inside `width`x`height`. See the table below. |
-| `resize` | `true` | `false` dithers at the source resolution instead. |
+| `resize` | `true` | `false` dithers at the source resolution instead. It governs the scaling only: `crop` still frames the photo, to `width`x`height`'s shape or the preset's. |
 | `keep_orientation` | `false` | `true` transposes `width`x`height` for a photo that disagrees with it, so a portrait upload stays portrait. |
 | `crop` | `false` | `true` crops to `width`x`height`'s aspect ratio instead of stretching the photo into it. |
 | `crop_from` | `center` | Which part the crop keeps: `center`, `top`, `bottom`, `left`, `right`, or a corner as `X,Y`. Needs `crop=true`. |
@@ -99,6 +99,8 @@ Settings ride in the query string on both POST routes. Every one is optional.
 An unknown parameter is an error rather than a silent no-op, so a typo shows up immediately.
 
 `keep_orientation` and `crop` are what an upload of any shape needs to come out undistorted: the first picks the panel layout the photo is closer to, the second trims the long side rather than stretching the short one. Neither changes the size that comes back, so a client can keep reading it off `x-image-size`.
+
+`resize=false` and `crop=true` compose: the first says do not scale, the second says how to frame, and together they hand back the framed region at the upload's own resolution. A 1536x2048 photo with `preset=instagram-story&crop=true&resize=false` comes back 1152x2048, not 1080x1920, and `x-crop-rect` reports the region either way.
 
 `method=none` skips the dither and returns the photo resized and cropped, and nothing else. It is for checking the framing, where the dither pattern is in the way. `resize`, `preset`, `crop`, `crop_from`, `crop_zoom`, `scale` and the `x-crop-rect` header all work the same; the palette settings have nothing to act on, and `format` has no palette to index, so the result is always a plain RGB PNG. `POST /api/buffer` refuses it with a 400, since the panel takes palette slots.
 

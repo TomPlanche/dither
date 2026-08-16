@@ -267,6 +267,18 @@ impl DitherParams {
         })
     }
 
+    /// The shape the geometry is measured against, whatever `resize` says.
+    ///
+    /// `resize=false` keeps the source resolution, but a crop still needs a shape to aim at, and this is it: the
+    /// preset's ratio, or `width`x`height` when no preset was named. So `resize=false` means no scaling rather than no
+    /// framing, and `crop` keeps working underneath it.
+    pub fn working_ratio(self) -> (u32, u32) {
+        match self.preset {
+            Some(preset) => preset.ratio(),
+            None => (self.width, self.height),
+        }
+    }
+
     /// How a photo that does not share the working size's shape is fitted to it.
     pub fn fit(self) -> FitOptions {
         FitOptions {

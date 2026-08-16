@@ -99,7 +99,7 @@ reframe-dither photo.jpg --buffer
 | `--threshold-scale <F>` | `1.0` | Scales the Bayer threshold amplitude. Ordered only |
 | `--size <WxH>` | `600x400` | Working size. With `--preset` it is the box the ratio is fitted inside |
 | `--preset <NAME>` | none | Aspect ratio by name, from the table below. Reshapes `--size` rather than replacing it |
-| `--no-resize` | off | Dither at the source resolution |
+| `--no-resize` | off | Dither at the source resolution. Scaling only: `--crop` still frames the photo |
 | `--keep-orientation` | off | Resize a portrait photo to the transpose of the working size, so it stays portrait |
 | `--crop` | off | Crop to the working size's aspect ratio instead of stretching the photo into it |
 | `--crop-from <WHERE>` | `center` | Which part the crop keeps: `center`, `top`, `bottom`, `left`, `right`, or a corner as `X,Y`. Needs `--crop` |

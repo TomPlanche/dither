@@ -361,6 +361,34 @@ async fn the_panel_refuses_an_undithered_image() {
 }
 
 #[tokio::test]
+async fn resize_false_still_crops_it_just_does_not_scale() {
+    // The 120x40 source, framed square from 20 rows down: 20x20 of its own pixels, not scaled to 40x40.
+    let uri = "/api/dither?method=none&resize=false&width=40&height=40&crop=true&crop_from=0,20";
+    let response = call(post(uri, "image/png", banded_png())).await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["x-crop-rect"], "0,20,20,20");
+    assert_eq!(response.headers()["x-image-size"], "20x20");
+
+    // Moving the corner moves the result, which is the whole point.
+    let uri = "/api/dither?method=none&resize=false&width=40&height=40&crop=true&crop_from=40,0";
+    let response = call(post(uri, "image/png", banded_png())).await;
+    assert_eq!(response.headers()["x-crop-rect"], "40,0,40,40");
+    let cropped = io::decode_rgb(&body_bytes(response).await).expect("the result decodes");
+    assert!(
+        cropped.pixels().all(|p| p.0.iter().all(|&c| c > 200)),
+        "the corner should land on the white band, got {:?}",
+        cropped.get_pixel(0, 0)
+    );
+
+    // Without a crop, `resize=false` still hands back the whole photo untouched.
+    let uri = "/api/dither?method=none&resize=false";
+    let response = call(post(uri, "image/png", banded_png())).await;
+    assert_eq!(response.headers()["x-crop-rect"], "0,0,120,40");
+    assert_eq!(response.headers()["x-image-size"], "120x40");
+}
+
+#[tokio::test]
 async fn the_crop_rect_header_says_which_part_of_the_upload_was_read() {
     // No crop: the whole 120x40 photo, which also tells a client what the source measured.
     let response = call(post("/api/dither?width=40&height=40", "image/png", banded_png())).await;
