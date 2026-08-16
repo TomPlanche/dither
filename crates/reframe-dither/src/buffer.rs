@@ -59,7 +59,7 @@ impl IndexedImage {
         }
     }
 
-    /// Nearest-neighbour integer upscale, matching the dashboard's 2x export.
+    /// Nearest-neighbour integer upscale, which keeps the dither pattern crisp rather than smearing it.
     pub fn scale_nearest(&self, factor: u32) -> IndexedImage {
         IndexedImage {
             indices: imageops::resize(

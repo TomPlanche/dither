@@ -1,8 +1,12 @@
 # reframe-dither
 
-A Rust port of the reframe camera's dithering pipeline: it reduces a full-colour photo to the six colours a Waveshare 4" Spectra 6 e-paper panel can show, and packs the result into the panel's frame buffer.
+A dithering pipeline: it reduces a full-colour photo to a fixed palette, a handful of colours chosen once and reused for every pixel, and hands back a picture made of nothing else.
 
-Ships as both a library (`reframe_dither`) and a CLI (`reframe-dither`). Ported from `ImageProcessor` in `../reframe.py`, from [kaloyaan/reframe](https://github.com/kaloyaan/reframe): the algorithm is theirs, this crate only rewrites it in Rust.
+Ships as both a library (`reframe_dither`) and a CLI (`reframe-dither`).
+
+The palette is the Spectra 6 one, seven slots blended from six inks, and the result can be packed into that panel's frame buffer for anyone who has the hardware. Nothing above that last stage knows about it: the dither is there for the look.
+
+The idea comes from [kaloyaan/reframe](https://github.com/kaloyaan/reframe), whose camera dithers to the same palette in Python. Credit for the approach, the palette blend and the buffer layout goes there. This crate is not a translation of it: the framing (orientation, cropping, ratio presets), the extra error-diffusion kernels and the two-step downscale are its own, and it is built to be driven from a CLI or over HTTP.
 
 This crate is a member of the workspace at the repository root, alongside `dither-server`, which serves the same pipeline over HTTP. The commands below are run from that root.
 
@@ -13,7 +17,7 @@ cargo build --release -p reframe-dither
 ./target/release/reframe-dither photo.jpg
 ```
 
-That writes `photo_dithered.png` next to the input, resized to the panel's 600x400 working size and dithered with the camera's default settings.
+That writes `photo_dithered.png` next to the input, resized to the 600x400 working size and dithered with the default settings.
 
 Several images at once, into a directory:
 
@@ -105,12 +109,10 @@ reframe-dither photo.jpg --buffer
 | `--crop` | off | Crop to the working size's aspect ratio instead of stretching the photo into it |
 | `--crop-from <WHERE>` | `center` | Which part the crop keeps: `center`, `top`, `bottom`, `left`, `right`, or a corner as `X,Y`. Needs `--crop` |
 | `--crop-zoom <F>` | `1.0` | `1.0` to `10.0`. Above 1.0 the crop keeps a proportionally smaller rectangle. Needs `--crop`. Not needed with a corner |
-| `--upscale-2x` | off | Nearest-neighbour doubling, matching the dashboard export |
-| `-f, --format <F>` | `indexed` | `indexed` (palette PNG, as the camera saves) or `rgb` |
+| `--upscale-2x` | off | Nearest-neighbour doubling of the result |
+| `-f, --format <F>` | `indexed` | `indexed` (palette PNG, what the panel wants) or `rgb` |
 | `--buffer` | off | Also write the packed e-paper frame buffer |
 | `--dry-run` | off | Report what would be written |
-
-The defaults mirror the `processing` section of `settings.example.json`.
 
 ### Presets
 
@@ -136,7 +138,7 @@ What a run costs follows `--size` rather than the name, since that is what decid
 
 | `-m` value | Kind | Character |
 | --- | --- | --- |
-| `floyd-steinberg` | error diffusion | The camera's default. Sharp |
+| `floyd-steinberg` | error diffusion | The default. The sharpest of them |
 | `atkinson` | error diffusion | Sheds some error: cleaner highlights, more contrast |
 | `stucki` | error diffusion | Wider spread, smoother gradients |
 | `burkes` | error diffusion | Like Stucki but cheaper, grainier |
@@ -144,13 +146,13 @@ What a run costs follows `--size` rather than the name, since that is what decid
 | `ordered` | Bayer threshold | Structured rather than organic. Strong colour cast |
 | `none` | none | Writes the photo resized and cropped, for checking the framing. Always an RGB PNG, and refused with `--buffer` |
 
-Only `floyd-steinberg` and `ordered` exist in the Python original; the rest come free from the shared kernel table.
+reframe has `floyd-steinberg` and `ordered`; the rest come free from the shared kernel table.
 
 ## Library
 
 ```toml
 [dependencies]
-reframe-dither = { path = "../port" }
+reframe-dither = { path = "crates/reframe-dither" }
 ```
 
 ```rust
@@ -211,7 +213,7 @@ Inputs are `image::RgbImage`, so anything that crate can decode works, and `RgbI
 For a library-only build with no codecs:
 
 ```toml
-reframe-dither = { path = "../port", default-features = false }
+reframe-dither = { path = "crates/reframe-dither", default-features = false }
 ```
 
 ## What comes from where
@@ -239,9 +241,9 @@ cargo bench -p reframe-dither
 
 [BENCHMARKS.md](BENCHMARKS.md) logs every measurement, one entry per change that moves the numbers, along with the method and the machine each was taken on.
 
-## Fidelity
+## Agreement with reframe
 
-`tests/parity.rs` measures agreement against fixtures generated from the real `ImageProcessor`. Regenerate them with:
+The palette blend and the frame buffer layout have to match reframe's, since both drive the same panel and its colour codes are not negotiable. `tests/parity.rs` keeps that honest by measuring this crate against fixtures generated from reframe's own `ImageProcessor`. It is a cross-check on the parts that must agree, not a claim that the two produce the same image everywhere. Regenerate the fixtures with:
 
 ```bash
 python3 tests/generate_golden.py   # needs Pillow and NumPy

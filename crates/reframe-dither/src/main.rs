@@ -16,7 +16,7 @@ use reframe_dither::{
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 enum MethodArg {
-    /// Error diffusion. The default, and what the camera ships with.
+    /// Error diffusion. The default, and the sharpest of the kernels.
     FloydSteinberg,
     /// Error diffusion that sheds some error: cleaner highlights, more contrast.
     Atkinson,
@@ -50,13 +50,13 @@ impl MethodArg {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 enum FormatArg {
-    /// Indexed PNG carrying the 6-colour palette, as the camera saves it.
+    /// Indexed PNG carrying the palette, which is what the panel wants.
     Indexed,
     /// Plain RGB PNG, for viewers that dislike palette images.
     Rgb,
 }
 
-/// Dither photos to the reframe e-paper camera's 6-colour palette.
+/// Dither photos to a fixed colour palette.
 #[derive(Debug, Parser)]
 #[command(name = "reframe-dither", version, about, long_about = None)]
 struct Cli {
@@ -135,7 +135,7 @@ struct Cli {
     #[arg(long, requires = "crop", default_value_t = 1.0, value_name = "F", value_parser = parse_zoom)]
     crop_zoom: f32,
 
-    /// Double the output with nearest-neighbour, matching the dashboard export.
+    /// Double the output with nearest-neighbour.
     #[arg(long)]
     upscale_2x: bool,
 
@@ -237,7 +237,7 @@ impl Cli {
     /// Where a given input's dithered PNG should land.
     ///
     /// A single input may name its output file directly; otherwise outputs are
-    /// `<stem>_dithered.png`, matching the camera's own naming.
+    /// `<stem>_dithered.png`, alongside the input.
     fn output_path(&self, input: &Path) -> PathBuf {
         let default_name = {
             let stem = input.file_stem().unwrap_or_default().to_string_lossy();

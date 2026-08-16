@@ -25,7 +25,7 @@ pub struct Kernel {
     pub divisor: i32,
 }
 
-/// The classic. Sharp, and what the camera ships with.
+/// The classic. Sharp, and the default here.
 pub const FLOYD_STEINBERG: Kernel = Kernel {
     name: "floyd-steinberg",
     offsets: &[(1, 0, 7), (-1, 1, 3), (0, 1, 5), (1, 1, 1)],

@@ -1,10 +1,10 @@
-# port
+# dither
 
-A Cargo workspace around the reframe e-paper dithering pipeline: the pipeline itself, and an HTTP backend that puts it behind a few routes for a Svelte front end.
+A Cargo workspace around a dithering pipeline: the pipeline itself, which reduces a photo to a fixed palette, and an HTTP backend that puts it behind a few routes for a Svelte front end. It takes its inspiration from [kaloyaan/reframe](https://github.com/kaloyaan/reframe), a camera that dithers to the same palette in Python.
 
 ```
 crates/
-  reframe-dither/   library + CLI: the 6-colour dithering pipeline
+  reframe-dither/   library + CLI: the dithering pipeline itself
   dither-server/    library + binary: the HTTP backend
 ```
 
@@ -267,7 +267,7 @@ A component using it:
 {#if preview}<img src={preview} alt="Dithered preview" />{/if}
 ```
 
-Note the `format: 'rgb'` in the preview call. Indexed PNGs are what the camera saves and what you want for the panel, but some browsers render them with slightly different colour management, so `rgb` is the safer choice for an on-screen preview.
+Note the `format: 'rgb'` in the preview call. Indexed PNGs are what the panel wants, but some browsers render them with slightly different colour management, so `rgb` is the safer choice for an on-screen preview.
 
 ### Skipping CORS in development
 
@@ -297,4 +297,4 @@ The API tests in `crates/dither-server/tests/api.rs` drive the router in-process
 
 ## Credits
 
-This project takes up the principle of [reframe](https://github.com/kaloyaan/reframe), an e-paper camera. I like the camera but cannot afford one, so I rebuilt its dithering algorithm in Rust for my own needs. The design, the palette handling and the processing pipeline are theirs; everything here is a port of that work, not a new idea.
+This project is inspired by [reframe](https://github.com/kaloyaan/reframe), an e-paper camera. I like the camera but cannot afford one, so I built my own dithering pipeline, and reframe is where the idea came from. The palette and the frame buffer layout follow it, since those have to match the panel they were made for. What grew around them is mine: the framing, the extra kernels, and the CLI and HTTP front ends. Go and look at the camera, it is lovely work.

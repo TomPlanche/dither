@@ -1,8 +1,14 @@
-//! A Rust port of the reframe camera's dithering pipeline.
+//! A dithering pipeline: it reduces a full-colour photo to a fixed palette, a
+//! handful of colours reused for every pixel.
 //!
-//! reframe photographs onto a Waveshare 4" Spectra 6 e-paper panel, which can
-//! only show six colours. This crate reduces a full-colour photo to that palette
-//! and packs the result into the panel's frame buffer.
+//! The palette is the Spectra 6 one, seven slots blended from six inks, and
+//! [`display`] can pack the result into that panel's frame buffer for anyone
+//! who has the hardware. Nothing above that stage knows about it.
+//!
+//! The idea comes from [kaloyaan/reframe](https://github.com/kaloyaan/reframe),
+//! a camera that dithers to the same palette in Python, and the blend and the
+//! buffer layout follow it. The rest, framing and kernels and the descent to the
+//! working size, is this crate's own.
 //!
 //! # Pipeline
 //!

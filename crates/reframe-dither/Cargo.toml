@@ -3,7 +3,7 @@ name = "reframe-dither"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Rust port of the reframe 6-colour e-paper dithering pipeline"
+description = "Dithers photos to a fixed colour palette, inspired by the reframe camera"
 readme = "README.md"
 
 [lib]

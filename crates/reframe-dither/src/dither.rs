@@ -33,10 +33,10 @@ impl Default for DitherMethod {
 }
 
 impl DitherMethod {
-    /// Plain Floyd-Steinberg, the camera's default.
+    /// Plain Floyd-Steinberg, this pipeline's default.
     pub const FLOYD_STEINBERG: Self = DitherMethod::ErrorDiffusion(FLOYD_STEINBERG);
 
-    /// Parses the spelling used in `settings.json`.
+    /// Parses the snake_case spelling a settings file carries.
     pub fn from_settings_name(name: &str) -> Option<Self> {
         match name {
             "floyd_steinberg" => Some(Self::FLOYD_STEINBERG),
@@ -45,10 +45,10 @@ impl DitherMethod {
         }
     }
 
-    /// The spelling used in `settings.json`.
+    /// The snake_case spelling a settings file carries.
     ///
-    /// Kernels the Python pipeline does not know about report as
-    /// `floyd_steinberg`, since that is the setting they are closest to.
+    /// Kernels that spelling has no name of its own for report as
+    /// `floyd_steinberg`, the setting they are closest to.
     pub fn settings_name(self) -> &'static str {
         match self {
             DitherMethod::ErrorDiffusion(_) => "floyd_steinberg",

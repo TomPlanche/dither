@@ -78,8 +78,8 @@ pub fn ratio_size(bounds: (u32, u32), ratio: (u32, u32)) -> (u32, u32) {
 
 /// How a photo that does not share the working size's shape is made to fit it.
 ///
-/// The flags are off by default, which is the camera's own behaviour: the photo is stretched into the landscape working
-/// size whatever shape it arrived in.
+/// The flags are off by default, which is the plainest thing to do: the photo is stretched into the working size
+/// whatever shape it arrived in.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FitOptions {
     /// Transpose the working size for a photo of the other orientation, so a portrait photo stays portrait.
@@ -548,7 +548,7 @@ mod tests {
             DISPLAY_IMAGE_SIZE
         );
 
-        // The default is the camera's: whatever the photo, the size it was asked for.
+        // The default: whatever the photo, the size it was asked for.
         assert_eq!(
             resize_to_fit(&portrait, DISPLAY_IMAGE_SIZE, FitOptions::default()).dimensions(),
             DISPLAY_IMAGE_SIZE

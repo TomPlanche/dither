@@ -1,7 +1,7 @@
 //! Query parameters accepted by the dithering endpoints.
 //!
 //! Every field has a default, so `POST /api/dither` with no query string runs
-//! the camera's own settings. The names here are also what `GET /api/options`
+//! the pipeline's own defaults. The names here are also what `GET /api/options`
 //! reports, so a client can round-trip its defaults straight back into a query
 //! string.
 
@@ -194,7 +194,7 @@ impl<'de> Deserialize<'de> for Resize {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Format {
-    /// Indexed PNG carrying the 6-colour palette, as the camera saves it.
+    /// Indexed PNG carrying the palette, which is what the panel wants.
     Indexed,
     /// Plain RGB PNG, for viewers that dislike palette images.
     Rgb,
