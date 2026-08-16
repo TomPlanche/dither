@@ -8,7 +8,7 @@ edition = "2024"
 license = "MIT"
 
 [workspace.dependencies]
-reframe-dither = { path = "crates/reframe-dither", default-features = false }
+dither-core = { path = "crates/dither-core", default-features = false }
 
 axum = "0.8"
 tokio = "1"

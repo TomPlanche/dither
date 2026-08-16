@@ -4,11 +4,11 @@ A Cargo workspace around a dithering pipeline: the pipeline itself, which reduce
 
 ```
 crates/
-  reframe-dither/   library + CLI: the dithering pipeline itself
+  dither-core/   library + CLI: the dithering pipeline itself
   dither-server/    library + binary: the HTTP backend
 ```
 
-`dither-server` is stateless. It takes an uploaded photo, runs it through `reframe-dither`, and hands back either a dithered PNG or the packed e-paper frame buffer. Nothing is written to disk and nothing is kept between requests.
+`dither-server` is stateless. It takes an uploaded photo, runs it through `dither-core`, and hands back either a dithered PNG or the packed e-paper frame buffer. Nothing is written to disk and nothing is kept between requests.
 
 ## Running the backend
 
@@ -290,7 +290,7 @@ cargo test --workspace          # unit tests plus the end-to-end API tests
 cargo clippy --workspace --all-targets
 cargo fmt --all
 cargo run -p dither-server      # the backend
-cargo run -p reframe-dither -- photo.jpg   # the CLI
+cargo run -p dither-core -- photo.jpg   # the CLI
 ```
 
 The API tests in `crates/dither-server/tests/api.rs` drive the router in-process, so they bind no socket and need no running server.

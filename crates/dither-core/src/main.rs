@@ -1,4 +1,4 @@
-//! Command line front end for the reframe dithering pipeline.
+//! Command line front end for the core dithering pipeline.
 
 use std::error::Error;
 use std::fmt::Write as _;
@@ -58,7 +58,7 @@ enum FormatArg {
 
 /// Dither photos to a fixed colour palette.
 #[derive(Debug, Parser)]
-#[command(name = "reframe-dither", version, about, long_about = None)]
+#[command(name = "dither-core", version, about, long_about = None)]
 struct Cli {
     /// Images to process.
     #[arg(required = true, value_name = "IMAGE")]

@@ -1,11 +1,11 @@
 //! Stage-by-stage benchmark of the dithering pipeline over the photos in `assets/`.
 //!
-//! Run with `cargo bench -p reframe-dither`. There is no external harness: the
+//! Run with `cargo bench -p dither-core`. There is no external harness: the
 //! stages here run in the tens of milliseconds, so a warmup plus a handful of
 //! timed repetitions is enough to separate them, and the report stays readable.
 //!
 //! Every stage is reported as the total across the whole asset set, so the
-//! numbers add up to what the CLI spends on `reframe-dither assets/*.jpg`.
+//! numbers add up to what the CLI spends on `dither-core assets/*.jpg`.
 
 use std::fmt::Write as _;
 use std::fs;
@@ -118,7 +118,7 @@ fn main() {
     let megapixels: f64 = assets.iter().map(Asset::megapixels).sum();
 
     println!(
-        "reframe-dither pipeline benchmark: {count} photos, {megapixels:.1} MP total, working size {}x{}",
+        "dither-core pipeline benchmark: {count} photos, {megapixels:.1} MP total, working size {}x{}",
         WORKING.0, WORKING.1
     );
     println!();

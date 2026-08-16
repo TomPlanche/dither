@@ -168,7 +168,6 @@ mod tests {
 
     #[test]
     fn blend_matches_the_python_reference() {
-        // Captured from `ImageProcessor.palette_blend(0.6)` in reframe.py.
         assert_eq!(
             palette_blend(0.6),
             [

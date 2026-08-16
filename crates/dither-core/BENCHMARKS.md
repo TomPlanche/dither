@@ -5,7 +5,7 @@ A running log of `benches/pipeline.rs`, one entry per change that moves the numb
 ## Reproducing
 
 ```bash
-cargo bench -p reframe-dither
+cargo bench -p dither-core
 ```
 
 The bench reads every `.jpg` in `assets/` at the repository root, sorted by filename, so a run on another machine measures the same work. It needs the `image-io` feature, which is on by default.
@@ -13,8 +13,8 @@ The bench reads every `.jpg` in `assets/` at the repository root, sorted by file
 The CLI wall clock is a separate cross-check, and it should stay close to the bench's end-to-end figure. If the two drift apart, the bench has stopped covering something the CLI actually does:
 
 ```bash
-cargo build --release -p reframe-dither
-time ./target/release/reframe-dither assets/*.jpg -o /tmp/bench-out
+cargo build --release -p dither-core
+time ./target/release/dither-core assets/*.jpg -o /tmp/bench-out
 du -sk /tmp/bench-out
 ```
 

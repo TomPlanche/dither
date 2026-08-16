@@ -1,8 +1,8 @@
-# reframe-dither
+# dither-core
 
 A dithering pipeline: it reduces a full-colour photo to a fixed palette, a handful of colours chosen once and reused for every pixel, and hands back a picture made of nothing else.
 
-Ships as both a library (`reframe_dither`) and a CLI (`reframe-dither`).
+Ships as both a library (`reframe_dither`) and a CLI (`dither-core`).
 
 The palette is the Spectra 6 one, seven slots blended from six inks, and the result can be packed into that panel's frame buffer for anyone who has the hardware. Nothing above that last stage knows about it: the dither is there for the look.
 
@@ -13,8 +13,8 @@ This crate is a member of the workspace at the repository root, alongside `dithe
 ## CLI
 
 ```bash
-cargo build --release -p reframe-dither
-./target/release/reframe-dither photo.jpg
+cargo build --release -p dither-core
+./target/release/dither-core photo.jpg
 ```
 
 That writes `photo_dithered.png` next to the input, resized to the 600x400 working size and dithered with the default settings.
@@ -22,53 +22,53 @@ That writes `photo_dithered.png` next to the input, resized to the 600x400 worki
 Several images at once, into a directory:
 
 ```bash
-reframe-dither *.jpg -o out/ --verbose
+dither-core *.jpg -o out/ --verbose
 ```
 
 A different error-diffusion kernel:
 
 ```bash
-reframe-dither photo.jpg -m atkinson
+dither-core photo.jpg -m atkinson
 ```
 
 Ordered dithering with a 2x2 Bayer matrix and softened thresholds:
 
 ```bash
-reframe-dither photo.jpg -m ordered --bayer-size 2 --threshold-scale 0.5
+dither-core photo.jpg -m ordered --bayer-size 2 --threshold-scale 0.5
 ```
 
 A portrait photo, kept portrait rather than squashed into the landscape working size:
 
 ```bash
-reframe-dither photo.jpg --keep-orientation
+dither-core photo.jpg --keep-orientation
 # a 3456x5184 photo comes out 400x600, the panel's own portrait size
 ```
 
 Undistorted whatever the photo's shape, which is the two flags together:
 
 ```bash
-reframe-dither photo.jpg --keep-orientation --crop
+dither-core photo.jpg --keep-orientation --crop
 # a 3:4 photo comes out 400x600 with the sides trimmed, not stretched to 2:3
 ```
 
 Keeping a different part than the middle:
 
 ```bash
-reframe-dither photo.jpg --crop --crop-from top
-reframe-dither photo.jpg --crop --crop-from 0,3800   # starts here, in source pixels: the top 3800 rows are dropped
+dither-core photo.jpg --crop --crop-from top
+dither-core photo.jpg --crop --crop-from 0,3800   # starts here, in source pixels: the top 3800 rows are dropped
 ```
 
 Checking the framing without the dither in the way:
 
 ```bash
-reframe-dither photo.jpg -m none --crop --crop-from 0,600
+dither-core photo.jpg -m none --crop --crop-from 0,600
 # the photo resized and cropped, and nothing else
 ```
 
 `--verbose` reports the rectangle that was kept, which is how to tell what a corner cost:
 
 ```bash
-reframe-dither photo.jpg --preset instagram-story --crop --crop-from 0,200 -v
+dither-core photo.jpg --preset instagram-story --crop --crop-from 0,200 -v
 # photo.jpg (1536x2048) -> photo_dithered.png (337x600) in 24ms
 #   crop: 1039x1848 from 0,200
 ```
@@ -76,17 +76,17 @@ reframe-dither photo.jpg --preset instagram-story --crop --crop-from 0,200 -v
 A shape a platform expects, rather than the panel's, at whatever size `--size` asks for:
 
 ```bash
-reframe-dither photo.jpg --preset instagram-story --crop
+dither-core photo.jpg --preset instagram-story --crop
 # 337x600, cropped to 9:16 rather than squeezed into it
 
-reframe-dither photo.jpg --preset instagram-story --crop --size 1080x1080
+dither-core photo.jpg --preset instagram-story --crop --size 1080x1080
 # 607x1080, the same 9:16 with the pixels to post it at
 ```
 
 Also emit the packed frame buffer, ready to hand to `epd.display()`:
 
 ```bash
-reframe-dither photo.jpg --buffer
+dither-core photo.jpg --buffer
 # writes photo_dithered.png and photo_dithered.bin (120000 bytes)
 ```
 
@@ -152,7 +152,7 @@ reframe has `floyd-steinberg` and `ordered`; the rest come free from the shared 
 
 ```toml
 [dependencies]
-reframe-dither = { path = "crates/reframe-dither" }
+dither-core = { path = "crates/dither-core" }
 ```
 
 ```rust
@@ -207,13 +207,13 @@ Inputs are `image::RgbImage`, so anything that crate can decode works, and `RgbI
 
 | Feature | Default | Pulls in |
 | --- | --- | --- |
-| `cli` | yes | The `reframe-dither` binary (`clap`) |
+| `cli` | yes | The `dither-core` binary (`clap`) |
 | `image-io` | yes | `io::load_rgb` and the PNG writers (`png`, plus `image`'s codecs) |
 
 For a library-only build with no codecs:
 
 ```toml
-reframe-dither = { path = "crates/reframe-dither", default-features = false }
+dither-core = { path = "crates/dither-core", default-features = false }
 ```
 
 ## What comes from where
@@ -236,7 +236,7 @@ That last one is a deliberate exception. `image::imageops::dither` clamps the ac
 `benches/pipeline.rs` times every stage over the photos in `assets/`, so the rows add up to what the CLI actually spends:
 
 ```bash
-cargo bench -p reframe-dither
+cargo bench -p dither-core
 ```
 
 [BENCHMARKS.md](BENCHMARKS.md) logs every measurement, one entry per change that moves the numbers, along with the method and the machine each was taken on.

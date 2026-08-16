@@ -3,7 +3,7 @@ name = "dither-server"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "HTTP backend exposing the reframe dithering pipeline"
+description = "HTTP backend exposing the core dithering pipeline"
 
 [lib]
 name = "dither_server"
@@ -15,7 +15,7 @@ path = "src/main.rs"
 
 [dependencies]
 # The pipeline itself. No CLI, but the byte-level image codecs.
-reframe-dither = { workspace = true, features = ["image-io"] }
+dither-core = { workspace = true, features = ["image-io"] }
 
 axum = { workspace = true, features = ["multipart"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "signal"] }
