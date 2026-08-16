@@ -11,7 +11,7 @@ use axum::body::Bytes;
 use axum::extract::{FromRequest, Multipart, Request, State};
 use axum::http::header::CONTENT_TYPE;
 use axum::response::{IntoResponse, Response};
-use reframe_dither::{
+use dither_core::{
     DISPLAY_IMAGE_SIZE, DISPLAY_PANEL_SIZE, IndexedImage, MAX_CROP_ZOOM, Orientation, PanelPalette, RgbImage,
     apply_dithering, display, io, resize,
 };

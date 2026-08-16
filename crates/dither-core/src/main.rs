@@ -8,11 +8,11 @@ use std::process::ExitCode;
 
 use clap::builder::TypedValueParser;
 use clap::{Parser, ValueEnum};
-use rayon::prelude::*;
-use reframe_dither::{
+use dither_core::{
     BayerSize, CropOrigin, DitherMethod, DitherOptions, FitOptions, IndexedImage, MAX_CROP_ZOOM, Orientation, RgbImage,
     apply_dithering, display, io, resize,
 };
+use rayon::prelude::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 enum MethodArg {
@@ -35,7 +35,7 @@ enum MethodArg {
 impl MethodArg {
     /// The pipeline's own method, or `None` when the run is only about the framing.
     fn dither(self) -> Option<DitherMethod> {
-        use reframe_dither::{ATKINSON, BURKES, FLOYD_STEINBERG, JARVIS_JUDICE_NINKE, STUCKI};
+        use dither_core::{ATKINSON, BURKES, FLOYD_STEINBERG, JARVIS_JUDICE_NINKE, STUCKI};
         Some(match self {
             MethodArg::FloydSteinberg => DitherMethod::ErrorDiffusion(FLOYD_STEINBERG),
             MethodArg::Atkinson => DitherMethod::ErrorDiffusion(ATKINSON),
@@ -323,8 +323,8 @@ fn process(cli: &Cli, input: &Path) -> Result<String, Box<dyn Error>> {
                     working.height(),
                     resize::DISPLAY_IMAGE_SIZE.0,
                     resize::DISPLAY_IMAGE_SIZE.1,
-                    reframe_dither::DISPLAY_PANEL_SIZE.0,
-                    reframe_dither::DISPLAY_PANEL_SIZE.1,
+                    dither_core::DISPLAY_PANEL_SIZE.0,
+                    dither_core::DISPLAY_PANEL_SIZE.1,
                 );
             }
             (Rendered::Palette(dithered), Some(buf))

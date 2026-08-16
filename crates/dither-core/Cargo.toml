@@ -7,7 +7,7 @@ description = "Dithers photos to a fixed colour palette, inspired by the reframe
 readme = "README.md"
 
 [lib]
-name = "dither-core"
+name = "dither_core"
 path = "src/lib.rs"
 
 [[bin]]

@@ -5,8 +5,8 @@ use std::sync::Arc;
 use axum::body::{Body, Bytes};
 use axum::http::{Request, StatusCode};
 use axum::response::Response;
+use dither_core::{DISPLAY_PANEL_SIZE, RgbImage, io};
 use dither_server::{Config, router};
-use reframe_dither::{DISPLAY_PANEL_SIZE, RgbImage, io};
 use tower::ServiceExt;
 
 /// A small landscape PNG with enough colour variation to exercise the dither.

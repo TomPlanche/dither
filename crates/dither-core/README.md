@@ -2,7 +2,7 @@
 
 A dithering pipeline: it reduces a full-colour photo to a fixed palette, a handful of colours chosen once and reused for every pixel, and hands back a picture made of nothing else.
 
-Ships as both a library (`reframe_dither`) and a CLI (`dither-core`).
+Ships as both a library (`dither_core`) and a CLI (`dither-core`).
 
 The palette is the Spectra 6 one, seven slots blended from six inks, and the result can be packed into that panel's frame buffer for anyone who has the hardware. Nothing above that last stage knows about it: the dither is there for the look.
 
@@ -156,7 +156,7 @@ dither-core = { path = "crates/dither-core" }
 ```
 
 ```rust
-use reframe_dither::{ATKINSON, DitherMethod, DitherOptions, apply_dithering, io, resize};
+use dither_core::{ATKINSON, DitherMethod, DitherOptions, apply_dithering, io, resize};
 
 let photo = io::load_rgb("photo.jpg")?;
 let sized = resize::resize_image(&photo, resize::DISPLAY_IMAGE_SIZE);
@@ -173,7 +173,7 @@ io::save_indexed_png(&dithered, "photo_dithered.png")?;
 Straight to the panel:
 
 ```rust
-use reframe_dither::{DitherOptions, dither_to_display_buffer};
+use dither_core::{DitherOptions, dither_to_display_buffer};
 
 let (buffer, dithered, _orientation) = dither_to_display_buffer(&sized, &DitherOptions::default());
 // `buffer` is 120000 bytes: two 4-bit colour codes per byte, portrait.
@@ -182,7 +182,7 @@ let (buffer, dithered, _orientation) = dither_to_display_buffer(&sized, &DitherO
 `resize::resize_image` always produces the size you name, stretching the photo into it. `resize::resize_to_fit` takes a `FitOptions` instead: `keep_orientation` transposes the size for a photo of the other orientation, so a portrait photo comes out 400x600 and a landscape one 600x400, and `crop` takes the largest centred rectangle that already has the target's ratio rather than stretching what is left over. Both 600x400 and 400x600 are sizes the panel takes, and `dither_to_display_buffer` reports which one it got through its `Orientation`.
 
 ```rust
-use reframe_dither::FitOptions;
+use dither_core::FitOptions;
 
 let fit = FitOptions { keep_orientation: true, crop: true, ..Default::default() };
 let sized = resize::resize_to_fit(&photo, resize::DISPLAY_IMAGE_SIZE, fit);

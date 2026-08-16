@@ -12,11 +12,9 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use reframe_dither::diffusion::{ATKINSON, BURKES, FLOYD_STEINBERG, JARVIS_JUDICE_NINKE, STUCKI};
-use reframe_dither::dither::OrderedLut;
-use reframe_dither::{
-    DitherMethod, DitherOptions, PanelPalette, RgbImage, apply_dithering, display, enhance, io, resize,
-};
+use dither_core::diffusion::{ATKINSON, BURKES, FLOYD_STEINBERG, JARVIS_JUDICE_NINKE, STUCKI};
+use dither_core::dither::OrderedLut;
+use dither_core::{DitherMethod, DitherOptions, PanelPalette, RgbImage, apply_dithering, display, enhance, io, resize};
 
 /// The size the pipeline dithers at.
 const WORKING: (u32, u32) = resize::DISPLAY_IMAGE_SIZE;

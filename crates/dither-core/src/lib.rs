@@ -27,7 +27,7 @@
 //! # Example
 //!
 //! ```no_run
-//! use reframe_dither::{DitherOptions, apply_dithering, io, resize};
+//! use dither_core::{DitherOptions, apply_dithering, io, resize};
 //!
 //! let photo = io::load_rgb("photo.jpg")?;
 //! let sized = resize::resize_image(&photo, resize::DISPLAY_IMAGE_SIZE);

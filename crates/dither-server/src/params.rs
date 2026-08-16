@@ -7,7 +7,7 @@
 
 use axum::extract::{FromRequestParts, Query};
 use axum::http::request::Parts;
-use reframe_dither::{
+use dither_core::{
     ATKINSON, BURKES, BayerSize, CropOrigin, DitherMethod, DitherOptions, FLOYD_STEINBERG, FitOptions,
     JARVIS_JUDICE_NINKE, MAX_CROP_ZOOM, STUCKI,
 };
@@ -67,7 +67,7 @@ impl Method {
 
 /// An aspect ratio that goes by name.
 ///
-/// The variants mirror [`reframe_dither::RATIO_PRESETS`], which is where the ratios come from. Serde does the
+/// The variants mirror [`dither_core::RATIO_PRESETS`], which is where the ratios come from. Serde does the
 /// validating: an unknown name is refused with the list of the ones that work.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -107,7 +107,7 @@ impl Preset {
 
     /// The aspect ratio it names, as `width:height`.
     pub fn ratio(self) -> (u32, u32) {
-        reframe_dither::preset_ratio(self.name()).expect("every preset names a ratio the pipeline knows")
+        dither_core::preset_ratio(self.name()).expect("every preset names a ratio the pipeline knows")
     }
 }
 
@@ -260,8 +260,8 @@ impl Default for DitherParams {
             color: defaults.color_factor,
             bayer_size: defaults.bayer_size.side() as u32,
             threshold_scale: defaults.threshold_scale,
-            width: reframe_dither::DISPLAY_IMAGE_SIZE.0,
-            height: reframe_dither::DISPLAY_IMAGE_SIZE.1,
+            width: dither_core::DISPLAY_IMAGE_SIZE.0,
+            height: dither_core::DISPLAY_IMAGE_SIZE.1,
             preset: None,
             resize: Resize::Fit,
             keep_orientation: false,
@@ -349,7 +349,7 @@ impl DitherParams {
     /// dimensions the request already had checked.
     pub fn working_size(self) -> Option<(u32, u32)> {
         matches!(self.resize, Resize::Fit)
-            .then(|| reframe_dither::ratio_size((self.width, self.height), self.working_ratio()))
+            .then(|| dither_core::ratio_size((self.width, self.height), self.working_ratio()))
     }
 
     /// The shape the geometry is measured against, whatever `resize` says.
@@ -382,7 +382,7 @@ impl DitherParams {
 mod crop_from {
     use std::str::FromStr;
 
-    use reframe_dither::CropOrigin;
+    use dither_core::CropOrigin;
     use serde::{Deserialize, Deserializer, Serializer};
 
     pub fn serialize<S: Serializer>(origin: &Option<CropOrigin>, serializer: S) -> Result<S::Ok, S::Error> {
@@ -562,8 +562,8 @@ mod tests {
             }
             .working_size()
         };
-        assert_eq!(panel(Preset::Panel), Some(reframe_dither::DISPLAY_IMAGE_SIZE));
-        assert_eq!(panel(Preset::PanelPortrait), Some(reframe_dither::DISPLAY_PANEL_SIZE));
+        assert_eq!(panel(Preset::Panel), Some(dither_core::DISPLAY_IMAGE_SIZE));
+        assert_eq!(panel(Preset::PanelPortrait), Some(dither_core::DISPLAY_PANEL_SIZE));
 
         // And a bigger pair buys more pixels of the same shape.
         let bigger = DitherParams {

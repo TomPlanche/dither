@@ -1,7 +1,7 @@
 //! HTTP backend over the core dithering pipeline.
 //!
 //! One stateless job: take an uploaded photo, run it through
-//! [`reframe_dither`], and hand back either a dithered PNG or the packed
+//! [`dither_core`], and hand back either a dithered PNG or the packed
 //! e-paper frame buffer. Nothing is stored between requests.
 //!
 //! | Route | What it does |
