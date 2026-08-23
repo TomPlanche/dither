@@ -5,7 +5,7 @@ use std::sync::Arc;
 use axum::body::{Body, Bytes};
 use axum::http::{Request, StatusCode};
 use axum::response::Response;
-use dither_core::{DISPLAY_PANEL_SIZE, RgbImage, io};
+use dither_core::{RgbImage, io};
 use dither_server::{Config, router};
 use tower::ServiceExt;
 
@@ -92,9 +92,9 @@ async fn options_defaults_round_trip_into_a_query_string() {
     assert_eq!(json["defaults"]["method"], "floyd-steinberg");
     assert_eq!(json["defaults"]["width"], 600);
 
-    // Seven slots, blended at the default saturation, ready for CSS.
-    let palette = json["panel"]["palette"].as_array().expect("palette is an array");
-    assert_eq!(palette.len(), 7);
+    // Six slots, blended at the default saturation, ready for CSS.
+    let palette = json["palette"].as_array().expect("palette is an array");
+    assert_eq!(palette.len(), 6);
     assert!(palette.iter().all(|color| {
         let color = color.as_str().unwrap_or_default();
         color.len() == 7 && color.starts_with('#') && color[1..].chars().all(|c| c.is_ascii_hexdigit())
@@ -183,15 +183,15 @@ async fn a_preset_reshapes_the_working_size_rather_than_replacing_it() {
     let response = call(post(uri, "image/png", source_png())).await;
     assert_eq!(response.headers()["x-image-size"], "607x1080");
 
-    // And a smaller one costs them: 2:3 inside 320x240 rather than the panel's own 400x600.
-    let uri = "/api/dither?preset=panel-portrait&width=320&height=240";
+    // And a smaller one costs them: 9:16 inside 320x240 rather than inside the default 600x400.
+    let uri = "/api/dither?preset=instagram-story&width=320&height=240";
     let response = call(post(uri, "image/png", source_png())).await;
-    assert_eq!(response.headers()["x-image-size"], "213x320");
+    assert_eq!(response.headers()["x-image-size"], "180x320");
 
     // It follows the photo when the orientation is kept: the portrait preset turned over for a landscape upload.
-    let uri = "/api/dither?preset=panel-portrait&keep_orientation=true";
+    let uri = "/api/dither?preset=instagram-story&keep_orientation=true";
     let response = call(post(uri, "image/png", source_png())).await;
-    assert_eq!(response.headers()["x-image-size"], "600x400");
+    assert_eq!(response.headers()["x-image-size"], "600x337");
 }
 
 #[tokio::test]
@@ -207,8 +207,6 @@ async fn options_lists_every_preset_with_its_ratio() {
     assert_eq!(
         names,
         [
-            "panel",
-            "panel-portrait",
             "instagram-post",
             "instagram-portrait",
             "instagram-landscape",
@@ -216,7 +214,7 @@ async fn options_lists_every_preset_with_its_ratio() {
             "iphone"
         ]
     );
-    assert_eq!(presets[0]["ratio"], serde_json::json!([3, 2]));
+    assert_eq!(presets[0]["ratio"], serde_json::json!([1, 1]));
 
     // Every listed name end to end. A preset is fitted inside `width` and `height`, so none of them can cost more than
     // the default 600x400 does, and all seven are affordable here.
@@ -348,16 +346,9 @@ async fn method_none_returns_the_framing_without_dithering_it() {
 }
 
 #[tokio::test]
-async fn the_panel_refuses_an_undithered_image() {
-    let response = call(post("/api/buffer?method=none", "image/png", source_png())).await;
-
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    let json: serde_json::Value = serde_json::from_slice(&body_bytes(response).await).expect("the error is JSON");
-    let error = json["error"].as_str().expect("error is a string");
-    assert!(
-        error.contains("method=none"),
-        "the message should name the cause: {error}"
-    );
+async fn removed_routes_are_gone() {
+    let response = call(post("/api/buffer", "image/png", source_png())).await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
@@ -430,11 +421,6 @@ async fn the_crop_rect_header_says_which_part_of_the_upload_was_read() {
     let uri = "/api/dither?width=40&height=40&crop=true";
     let response = call(post(uri, "image/png", banded_png())).await;
     assert_eq!(response.headers()["x-crop-rect"], "40,0,40,40");
-
-    // The buffer route reports it too, on a size the panel takes.
-    let response = call(post("/api/buffer?crop=true", "image/png", banded_png())).await;
-    assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(response.headers()["x-crop-rect"], "30,0,60,40");
 }
 
 #[tokio::test]
@@ -509,20 +495,16 @@ async fn crop_from_without_crop_is_refused_rather_than_ignored() {
 }
 
 #[tokio::test]
-async fn a_portrait_upload_reaches_the_panel_without_a_rotation() {
+async fn a_portrait_upload_keeps_its_orientation() {
     let response = call(post(
-        "/api/buffer?keep_orientation=true",
+        "/api/dither?keep_orientation=true",
         "image/png",
         sized_png(90, 120),
     ))
     .await;
 
     assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(response.headers()["x-panel-orientation"], "panel");
     assert_eq!(response.headers()["x-image-size"], "400x600");
-
-    let expected = (DISPLAY_PANEL_SIZE.0 * DISPLAY_PANEL_SIZE.1) as usize / 2;
-    assert_eq!(body_bytes(response).await.len(), expected);
 }
 
 #[tokio::test]
@@ -531,31 +513,6 @@ async fn scale_multiplies_the_output() {
 
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(response.headers()["x-image-size"], "1200x800");
-}
-
-#[tokio::test]
-async fn the_buffer_endpoint_returns_a_packed_panel_frame() {
-    let response = call(post("/api/buffer", "image/png", source_png())).await;
-
-    assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(response.headers()["content-type"], "application/octet-stream");
-    assert_eq!(response.headers()["x-panel-orientation"], "rotated");
-
-    // Two 4-bit codes per byte, over the whole portrait panel.
-    let expected = (DISPLAY_PANEL_SIZE.0 * DISPLAY_PANEL_SIZE.1) as usize / 2;
-    assert_eq!(body_bytes(response).await.len(), expected);
-}
-
-#[tokio::test]
-async fn a_size_the_panel_cannot_show_is_refused() {
-    let response = call(post("/api/buffer?width=320&height=240", "image/png", source_png())).await;
-
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    let json: serde_json::Value = serde_json::from_slice(&body_bytes(response).await).expect("the error is JSON");
-    assert!(
-        json["error"].as_str().expect("error is a string").contains("400x600"),
-        "the message should name the sizes the panel takes: {json}"
-    );
 }
 
 #[tokio::test]

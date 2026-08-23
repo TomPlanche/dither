@@ -15,7 +15,7 @@ use std::path::Path;
 
 use image::{DynamicImage, ImageDecoder, ImageReader, RgbImage};
 
-use crate::buffer::IndexedImage;
+use crate::indexed::IndexedImage;
 
 #[derive(Debug)]
 pub enum IoError {

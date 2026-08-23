@@ -1,8 +1,8 @@
 //! The dithering endpoints.
 //!
-//! Both accept an image the same two ways: a raw body (`fetch(url, { method:
-//! 'POST', body: file })`) or a `multipart/form-data` field named `image`.
-//! Settings ride along in the query string; see [`crate::params`].
+//! An image arrives one of two ways: a raw body (`fetch(url, { method: 'POST',
+//! body: file })`) or a `multipart/form-data` field named `image`. Settings
+//! ride along in the query string; see [`crate::params`].
 
 use std::sync::Arc;
 
@@ -11,10 +11,7 @@ use axum::body::Bytes;
 use axum::extract::{FromRequest, Multipart, Request, State};
 use axum::http::header::CONTENT_TYPE;
 use axum::response::{IntoResponse, Response};
-use dither_core::{
-    DISPLAY_IMAGE_SIZE, DISPLAY_PANEL_SIZE, IndexedImage, MAX_CROP_ZOOM, Orientation, PanelPalette, RgbImage,
-    apply_dithering, display, io, resize,
-};
+use dither_core::{DEFAULT_SIZE, IndexedImage, MAX_CROP_ZOOM, Palette, RgbImage, apply_dithering, io, resize};
 use serde::Serialize;
 
 use crate::config::Config;
@@ -25,8 +22,6 @@ use crate::params::{
 
 /// Size of the returned image, as `WIDTHxHEIGHT`.
 pub const X_IMAGE_SIZE: &str = "x-image-size";
-/// How the frame buffer had to be rotated: `panel` or `rotated`.
-pub const X_PANEL_ORIENTATION: &str = "x-panel-orientation";
 /// The part of the upload that was read, as `X,Y,WIDTH,HEIGHT` in source pixels.
 ///
 /// The whole photo when `crop` is off, so it always says what the source measured, which is what a client needs before
@@ -56,36 +51,13 @@ pub async fn dither(params: Params, request: Request) -> Result<Response, ApiErr
         .into_response())
 }
 
-/// `POST /api/buffer` — the packed e-paper frame buffer.
-///
-/// `format` and `scale` do not apply here and are ignored: the panel takes one
-/// layout only.
-pub async fn buffer(params: Params, request: Request) -> Result<Response, ApiError> {
-    let source = read_image(request).await?;
-    let Params(params) = params;
-
-    let panel = blocking(move || render_buffer(&source, params)).await?;
-
-    Ok((
-        [
-            (CONTENT_TYPE.as_str(), "application/octet-stream"),
-            ("cache-control", "no-store"),
-            (X_IMAGE_SIZE, panel.size.as_str()),
-            (X_CROP_RECT, panel.crop.as_str()),
-            (X_PANEL_ORIENTATION, panel.orientation),
-        ],
-        panel.bytes,
-    )
-        .into_response())
-}
-
-/// `GET /api/options` — defaults, accepted values and panel facts.
+/// `GET /api/options` — defaults, accepted values and the palette.
 ///
 /// `defaults` uses the same names as the query string, so a client can feed it
 /// straight into `URLSearchParams`.
 pub async fn options(State(config): State<Arc<Config>>) -> Json<OptionsBody> {
     let defaults = DitherParams::default();
-    let palette = PanelPalette::new(defaults.saturation);
+    let palette = Palette::new(defaults.saturation);
 
     Json(OptionsBody {
         methods: Method::ALL,
@@ -106,11 +78,8 @@ pub async fn options(State(config): State<Arc<Config>>) -> Json<OptionsBody> {
             max_source_pixels: MAX_SOURCE_PIXELS,
             max_crop_zoom: MAX_CROP_ZOOM,
         },
-        panel: Panel {
-            image_size: DISPLAY_IMAGE_SIZE,
-            panel_size: DISPLAY_PANEL_SIZE,
-            palette: palette.colors().iter().map(hex).collect(),
-        },
+        default_size: DEFAULT_SIZE,
+        palette: palette.colors().iter().map(hex).collect(),
     })
 }
 
@@ -122,7 +91,10 @@ pub struct OptionsBody {
     presets: Vec<PresetRatio>,
     defaults: DitherParams,
     limits: Limits,
-    panel: Panel,
+    /// The working size a request lands on when it names neither `width` nor `height`.
+    default_size: (u32, u32),
+    /// The palette at the default saturation, as `#rrggbb`, in slot order.
+    palette: Vec<String>,
 }
 
 /// A `preset` name and the `width:height` ratio it stands for, so a client can label its own picker.
@@ -144,13 +116,6 @@ struct Limits {
     max_crop_zoom: f32,
 }
 
-#[derive(Serialize)]
-struct Panel {
-    image_size: (u32, u32),
-    panel_size: (u32, u32),
-    palette: Vec<String>,
-}
-
 fn hex(rgb: &[u8; 3]) -> String {
     format!("#{:02x}{:02x}{:02x}", rgb[0], rgb[1], rgb[2])
 }
@@ -159,13 +124,6 @@ struct Rendered {
     bytes: Vec<u8>,
     size: String,
     crop: String,
-}
-
-struct PanelFrame {
-    bytes: Vec<u8>,
-    size: String,
-    crop: String,
-    orientation: &'static str,
 }
 
 /// Decode, resize, dither and re-encode. Runs on a blocking thread.
@@ -202,40 +160,6 @@ fn render_png(source: &[u8], params: DitherParams) -> Result<Rendered, ApiError>
         size: format!("{}x{}", dithered.width(), dithered.height()),
         bytes,
         crop,
-    })
-}
-
-/// Decode, resize, dither and pack into the panel's frame buffer.
-fn render_buffer(source: &[u8], params: DitherParams) -> Result<PanelFrame, ApiError> {
-    let options = params.to_options()?.ok_or_else(|| {
-        ApiError::bad_request("the panel takes palette slots, so method=none has nothing to pack; pick a dither")
-    })?;
-    let (working, crop) = prepare(source, params)?;
-
-    let (bytes, dithered, orientation) = display::dither_to_display_buffer(&working, &options);
-    let orientation = match orientation {
-        Orientation::Panel => "panel",
-        Orientation::Rotated => "rotated",
-        // The packer would still produce bytes, but the panel could not show them.
-        Orientation::Unexpected => {
-            return Err(ApiError::bad_request(format!(
-                "the panel takes {}x{} or {}x{}, but this request produced {}x{}; \
-                 leave `resize` on, or set width and height to one of those",
-                DISPLAY_IMAGE_SIZE.0,
-                DISPLAY_IMAGE_SIZE.1,
-                DISPLAY_PANEL_SIZE.0,
-                DISPLAY_PANEL_SIZE.1,
-                dithered.width(),
-                dithered.height(),
-            )));
-        },
-    };
-
-    Ok(PanelFrame {
-        size: format!("{}x{}", dithered.width(), dithered.height()),
-        bytes,
-        crop,
-        orientation,
     })
 }
 

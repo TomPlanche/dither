@@ -72,8 +72,6 @@ impl Method {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Preset {
-    Panel,
-    PanelPortrait,
     InstagramPost,
     InstagramPortrait,
     InstagramLandscape,
@@ -82,9 +80,7 @@ pub enum Preset {
 }
 
 impl Preset {
-    pub const ALL: [Preset; 7] = [
-        Preset::Panel,
-        Preset::PanelPortrait,
+    pub const ALL: [Preset; 5] = [
         Preset::InstagramPost,
         Preset::InstagramPortrait,
         Preset::InstagramLandscape,
@@ -95,8 +91,6 @@ impl Preset {
     /// The name this goes by, in both the query string and the pipeline's own table.
     pub fn name(self) -> &'static str {
         match self {
-            Preset::Panel => "panel",
-            Preset::PanelPortrait => "panel-portrait",
             Preset::InstagramPost => "instagram-post",
             Preset::InstagramPortrait => "instagram-portrait",
             Preset::InstagramLandscape => "instagram-landscape",
@@ -194,7 +188,7 @@ impl<'de> Deserialize<'de> for Resize {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Format {
-    /// Indexed PNG carrying the palette, which is what the panel wants.
+    /// Indexed PNG carrying the palette. Smaller, and the default.
     Indexed,
     /// Plain RGB PNG, for viewers that dislike palette images.
     Rgb,
@@ -204,7 +198,7 @@ pub enum Format {
 #[serde(default, deny_unknown_fields)]
 pub struct DitherParams {
     pub method: Method,
-    /// Blend between the pure and the muted panel palettes, 0.0 to 1.0.
+    /// Blend between the pure and the muted palettes, 0.0 to 1.0.
     pub saturation: f64,
     /// Brightness multiplier applied before dithering.
     pub brightness: f64,
@@ -260,8 +254,8 @@ impl Default for DitherParams {
             color: defaults.color_factor,
             bayer_size: defaults.bayer_size.side() as u32,
             threshold_scale: defaults.threshold_scale,
-            width: dither_core::DISPLAY_IMAGE_SIZE.0,
-            height: dither_core::DISPLAY_IMAGE_SIZE.1,
+            width: dither_core::DEFAULT_SIZE.0,
+            height: dither_core::DEFAULT_SIZE.1,
             preset: None,
             resize: Resize::Fit,
             keep_orientation: false,
@@ -344,8 +338,8 @@ impl DitherParams {
     /// The size to dither at, or `None` when the source resolution is kept.
     ///
     /// A preset reshapes `width`x`height` rather than replacing it: the largest rectangle of the preset's ratio that
-    /// fits inside the pair, which is turned over first when the ratio disagrees with it. So `preset=panel-portrait`
-    /// against the default 600x400 is the panel's own 400x600, and either way the result is never larger than the
+    /// fits inside the pair, which is turned over first when the ratio disagrees with it. So `preset=instagram-story`
+    /// against the default 600x400 is 337x600 rather than 225x400, and either way the result is never larger than the
     /// dimensions the request already had checked.
     pub fn working_size(self) -> Option<(u32, u32)> {
         matches!(self.resize, Resize::Fit)
@@ -537,7 +531,7 @@ mod tests {
         }
 
         assert_eq!(Preset::InstagramStory.ratio(), (9, 16));
-        assert_eq!(Preset::Panel.ratio(), (3, 2));
+        assert_eq!(Preset::Iphone.ratio(), (4, 3));
     }
 
     #[test]
@@ -554,16 +548,16 @@ mod tests {
         // Without one, the pair is used as it was sent.
         assert_eq!(DitherParams { preset: None, ..params }.working_size(), Some((320, 240)));
 
-        // The panel entries against the default pair land on the layouts `/api/buffer` packs.
-        let panel = |preset| {
+        // A portrait ratio turns the default pair over rather than being squeezed into its short side.
+        let against_default = |preset| {
             DitherParams {
                 preset: Some(preset),
                 ..Default::default()
             }
             .working_size()
         };
-        assert_eq!(panel(Preset::Panel), Some(dither_core::DISPLAY_IMAGE_SIZE));
-        assert_eq!(panel(Preset::PanelPortrait), Some(dither_core::DISPLAY_PANEL_SIZE));
+        assert_eq!(against_default(Preset::InstagramStory), Some((337, 600)));
+        assert_eq!(against_default(Preset::Iphone), Some((533, 400)));
 
         // And a bigger pair buys more pixels of the same shape.
         let bigger = DitherParams {

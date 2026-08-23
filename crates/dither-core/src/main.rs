@@ -9,8 +9,8 @@ use std::process::ExitCode;
 use clap::builder::TypedValueParser;
 use clap::{Parser, ValueEnum};
 use dither_core::{
-    BayerSize, CropOrigin, DitherMethod, DitherOptions, FitOptions, IndexedImage, MAX_CROP_ZOOM, Orientation, RgbImage,
-    apply_dithering, display, io, resize,
+    BayerSize, CropOrigin, DitherMethod, DitherOptions, FitOptions, IndexedImage, MAX_CROP_ZOOM, RgbImage,
+    apply_dithering, io, resize,
 };
 use rayon::prelude::*;
 
@@ -50,7 +50,7 @@ impl MethodArg {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 enum FormatArg {
-    /// Indexed PNG carrying the palette, which is what the panel wants.
+    /// Indexed PNG carrying the palette. Smaller, and the default.
     Indexed,
     /// Plain RGB PNG, for viewers that dislike palette images.
     Rgb,
@@ -72,7 +72,7 @@ struct Cli {
     #[arg(short, long, value_enum, default_value = "floyd-steinberg")]
     method: MethodArg,
 
-    /// Blend between the pure and the muted panel palettes, 0.0 to 1.0.
+    /// Blend between the pure and the muted palettes, 0.0 to 1.0.
     #[arg(long, default_value_t = 0.6, value_name = "F")]
     saturation: f64,
 
@@ -143,10 +143,6 @@ struct Cli {
     #[arg(short, long, value_enum, default_value = "indexed")]
     format: FormatArg,
 
-    /// Also write the packed e-paper frame buffer next to each image.
-    #[arg(long)]
-    buffer: bool,
-
     /// Report what would be written without writing it.
     #[arg(long)]
     dry_run: bool,
@@ -209,7 +205,7 @@ impl Cli {
     ///
     /// A preset only ever picks the shape, so `--size` still says how much gets dithered. It is fitted inside the pair
     /// rather than replacing it, and the pair is turned over first when the ratio disagrees with it, so
-    /// `--preset panel-portrait` against the default 600x400 is the panel's own 400x600.
+    /// `--preset instagram-story` against the default 600x400 is 337x600 rather than 225x400.
     fn working_size(&self) -> (u32, u32) {
         match self.preset {
             Some(ratio) => resize::ratio_size(self.size, ratio),
@@ -310,39 +306,17 @@ fn process(cli: &Cli, input: &Path) -> Result<String, Box<dyn Error>> {
         None => resize::resize_to_fit(&photo, target, cli.fit()),
     };
 
-    // Packing the frame buffer runs the dither too, so only do the work once.
-    let (rendered, buffer) = match cli.dither_options() {
-        None => (Rendered::Plain(working), None),
-        Some(options) if cli.buffer => {
-            let (buf, dithered, orientation) = display::dither_to_display_buffer(&working, &options);
-            if orientation == Orientation::Unexpected {
-                eprintln!(
-                    "warning: {} is {}x{}, not {}x{} or {}x{}; rotating anyway",
-                    input.display(),
-                    working.width(),
-                    working.height(),
-                    resize::DISPLAY_IMAGE_SIZE.0,
-                    resize::DISPLAY_IMAGE_SIZE.1,
-                    dither_core::DISPLAY_PANEL_SIZE.0,
-                    dither_core::DISPLAY_PANEL_SIZE.1,
-                );
-            }
-            (Rendered::Palette(dithered), Some(buf))
-        },
-        Some(options) => (Rendered::Palette(apply_dithering(&working, &options)), None),
+    let rendered = match cli.dither_options() {
+        None => Rendered::Plain(working),
+        Some(options) => Rendered::Palette(apply_dithering(&working, &options)),
     };
 
     let final_image = if cli.upscale_2x { rendered.scaled(2) } else { rendered };
 
     let out_path = cli.output_path(input);
-    let buffer_path = out_path.with_extension("bin");
 
     if cli.dry_run {
-        let mut report = format!("{} -> {}", input.display(), out_path.display());
-        if buffer.is_some() {
-            let _ = write!(report, "\n{} -> {}", input.display(), buffer_path.display());
-        }
-        return Ok(report);
+        return Ok(format!("{} -> {}", input.display(), out_path.display()));
     }
 
     if let Some(parent) = out_path.parent().filter(|p| !p.as_os_str().is_empty()) {
@@ -350,10 +324,6 @@ fn process(cli: &Cli, input: &Path) -> Result<String, Box<dyn Error>> {
     }
 
     final_image.save(&out_path, cli.format)?;
-
-    if let Some(buf) = &buffer {
-        fs::write(&buffer_path, buf)?;
-    }
 
     if !cli.verbose {
         return Ok(out_path.display().to_string());
@@ -374,26 +344,11 @@ fn process(cli: &Cli, input: &Path) -> Result<String, Box<dyn Error>> {
         let _ = write!(report, "\n  crop: {width}x{height} from {x},{y}");
     }
 
-    if let Some(buf) = &buffer {
-        let _ = write!(
-            report,
-            "\n  frame buffer: {} ({} bytes)",
-            buffer_path.display(),
-            buf.len()
-        );
-    }
-
     Ok(report)
 }
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
-
-    // The panel takes palette slots, so there is nothing to pack without a dither. Caught once rather than per input.
-    if cli.buffer && cli.method == MethodArg::None {
-        eprintln!("error: --buffer needs a dithered image, and --method none skips the dither");
-        return ExitCode::FAILURE;
-    }
 
     // Decoding dominates the pipeline and is single-threaded per photo, so a batch is fastest with one photo per core.
     // `map` over an indexed parallel iterator keeps the results in input order, so the output does not depend on which

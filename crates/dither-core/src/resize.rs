@@ -1,4 +1,4 @@
-//! Resizing to the panel's working size.
+//! Resizing a photo to the size it gets dithered at.
 
 use std::fmt;
 use std::str::FromStr;
@@ -7,8 +7,8 @@ use image::RgbImage;
 use image::imageops::{self, FilterType};
 use rayon::prelude::*;
 
-/// The landscape size the pipeline dithers at.
-pub const DISPLAY_IMAGE_SIZE: (u32, u32) = (600, 400);
+/// The landscape size the pipeline dithers at unless told otherwise.
+pub const DEFAULT_SIZE: (u32, u32) = (600, 400);
 
 /// As far into a photo as a crop will go.
 ///
@@ -20,16 +20,12 @@ pub const MAX_CROP_ZOOM: f32 = 10.0;
 /// A preset names a shape, never a pixel count. [`ratio_size`] fits it inside whatever working size was asked for, so
 /// how much to dither stays the caller's to pick and a preset only ever reframes it.
 ///
-/// The two panel entries are the layouts the frame buffer takes, and against the pipeline's own 600x400 they land on
-/// it exactly, which is what [`crate::display`] can pack. The rest are the shapes the platforms crop to, so a dithered
-/// photo can be posted without something else reframing it.
+/// These are the shapes the platforms crop to, so a dithered photo can be posted without something else reframing it.
+/// A caller that wants a shape not listed here passes its own working size instead.
 ///
 /// A preset names one orientation. The other one is [`FitOptions::keep_orientation`], which transposes whichever of
 /// these is asked for: `iphone` on a portrait photo dithers at 3:4.
-pub const RATIO_PRESETS: [(&str, (u32, u32)); 7] = [
-    // The panel's two layouts, which 600x400 and 400x600 are the pixel counts of.
-    ("panel", (3, 2)),
-    ("panel-portrait", (2, 3)),
+pub const RATIO_PRESETS: [(&str, (u32, u32)); 5] = [
     ("instagram-post", (1, 1)),
     ("instagram-portrait", (4, 5)),
     // 1.91:1, which the feed states in decimals rather than whole sides.
@@ -64,8 +60,8 @@ pub const fn preset_names() -> [&'static str; RATIO_PRESETS.len()] {
 /// caller asked for still says how many pixels get dithered.
 ///
 /// `bounds` is turned over first when the ratio disagrees with it, which is what keeps a portrait ratio against a
-/// landscape working size from being squeezed into its short side: `panel-portrait` inside 600x400 is the panel's own
-/// 400x600, not 266x400. A caller that wants the photo's orientation rather than the ratio's has
+/// landscape working size from being squeezed into its short side: `instagram-story` inside 600x400 is 337x600, not
+/// 225x400. A caller that wants the photo's orientation rather than the ratio's has
 /// [`FitOptions::keep_orientation`], which transposes the result the same way.
 ///
 /// A zero side leaves nothing to fit, so `bounds` comes back unchanged.
@@ -269,7 +265,7 @@ pub fn resize_image(image: &RgbImage, target: (u32, u32)) -> RgbImage {
 
 /// Scales the part of a photo that already has the target's aspect ratio, taken from `origin` at `zoom`.
 ///
-/// Nothing is distorted, and what it costs instead is the edges: a 3:2 photo against the 2:3 panel keeps the middle
+/// Nothing is distorted, and what it costs instead is the edges: a 3:2 photo against a 2:3 target keeps the middle
 /// third or so of its width. The crop is never materialised, so this reads the source once, the same as a plain resize.
 pub fn resize_cropped(image: &RgbImage, target: (u32, u32), origin: CropOrigin, zoom: f32) -> RgbImage {
     resize_region(image, cover_rect(image.dimensions(), target, origin, zoom), target)
@@ -439,7 +435,6 @@ fn box_reduce(image: &RgbImage, rect: (u32, u32, u32, u32), factor: u32) -> RgbI
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::display::DISPLAY_PANEL_SIZE;
 
     #[test]
     fn resize_to_the_same_size_is_a_no_op() {
@@ -467,9 +462,9 @@ mod tests {
         // Whatever the factor, both reduced sides must still cover the target, so the triangle pass that follows only
         // ever downscales.
         for (w, h) in [(8256, 5504), (3456, 5184), (1201, 801), (600, 401)] {
-            let factor = prefilter_factor((w, h), DISPLAY_IMAGE_SIZE);
+            let factor = prefilter_factor((w, h), DEFAULT_SIZE);
             assert!(
-                w / factor >= DISPLAY_IMAGE_SIZE.0 && h / factor >= DISPLAY_IMAGE_SIZE.1,
+                w / factor >= DEFAULT_SIZE.0 && h / factor >= DEFAULT_SIZE.1,
                 "{w}x{h} reduced by {factor} falls under the target"
             );
         }
@@ -477,12 +472,9 @@ mod tests {
 
     #[test]
     fn upscaling_skips_the_prefilter() {
-        assert_eq!(prefilter_factor((300, 200), DISPLAY_IMAGE_SIZE), 1);
+        assert_eq!(prefilter_factor((300, 200), DEFAULT_SIZE), 1);
         let image = RgbImage::from_pixel(300, 200, image::Rgb([9, 9, 9]));
-        assert_eq!(
-            resize_image(&image, DISPLAY_IMAGE_SIZE).dimensions(),
-            DISPLAY_IMAGE_SIZE
-        );
+        assert_eq!(resize_image(&image, DEFAULT_SIZE).dimensions(), DEFAULT_SIZE);
     }
 
     #[test]
@@ -504,8 +496,8 @@ mod tests {
         let image = RgbImage::from_fn(2400, 1600, |x, y| {
             image::Rgb([(x / 10) as u8, (y / 10) as u8, ((x + y) / 16) as u8])
         });
-        let two_step = resize_image(&image, DISPLAY_IMAGE_SIZE);
-        let single = imageops::resize(&image, DISPLAY_IMAGE_SIZE.0, DISPLAY_IMAGE_SIZE.1, FilterType::Triangle);
+        let two_step = resize_image(&image, DEFAULT_SIZE);
+        let single = imageops::resize(&image, DEFAULT_SIZE.0, DEFAULT_SIZE.1, FilterType::Triangle);
         let worst = two_step
             .as_raw()
             .iter()
@@ -519,14 +511,14 @@ mod tests {
     #[test]
     fn orienting_only_transposes_a_target_that_disagrees() {
         // Portrait photo, landscape target: transposed.
-        assert_eq!(orient_target((3456, 5184), DISPLAY_IMAGE_SIZE), (400, 600));
+        assert_eq!(orient_target((3456, 5184), DEFAULT_SIZE), (400, 600));
         // Landscape photo, landscape target: left alone.
-        assert_eq!(orient_target((5184, 3456), DISPLAY_IMAGE_SIZE), DISPLAY_IMAGE_SIZE);
+        assert_eq!(orient_target((5184, 3456), DEFAULT_SIZE), DEFAULT_SIZE);
         // And the same against a portrait target.
         assert_eq!(orient_target((3456, 5184), (400, 600)), (400, 600));
-        assert_eq!(orient_target((5184, 3456), (400, 600)), DISPLAY_IMAGE_SIZE);
+        assert_eq!(orient_target((5184, 3456), (400, 600)), DEFAULT_SIZE);
         // A square photo counts as landscape.
-        assert_eq!(orient_target((1000, 1000), DISPLAY_IMAGE_SIZE), DISPLAY_IMAGE_SIZE);
+        assert_eq!(orient_target((1000, 1000), DEFAULT_SIZE), DEFAULT_SIZE);
     }
 
     #[test]
@@ -537,21 +529,15 @@ mod tests {
         };
 
         let portrait = RgbImage::new(1200, 1800);
-        assert_eq!(
-            resize_to_fit(&portrait, DISPLAY_IMAGE_SIZE, keep).dimensions(),
-            (400, 600)
-        );
+        assert_eq!(resize_to_fit(&portrait, DEFAULT_SIZE, keep).dimensions(), (400, 600));
 
         let landscape = RgbImage::new(1800, 1200);
-        assert_eq!(
-            resize_to_fit(&landscape, DISPLAY_IMAGE_SIZE, keep).dimensions(),
-            DISPLAY_IMAGE_SIZE
-        );
+        assert_eq!(resize_to_fit(&landscape, DEFAULT_SIZE, keep).dimensions(), DEFAULT_SIZE);
 
         // The default: whatever the photo, the size it was asked for.
         assert_eq!(
-            resize_to_fit(&portrait, DISPLAY_IMAGE_SIZE, FitOptions::default()).dimensions(),
-            DISPLAY_IMAGE_SIZE
+            resize_to_fit(&portrait, DEFAULT_SIZE, FitOptions::default()).dimensions(),
+            DEFAULT_SIZE
         );
     }
 
@@ -560,21 +546,18 @@ mod tests {
         let centre = CropOrigin::Center;
         // A 2:3 photo against the 3:2 working size: the height comes off.
         assert_eq!(
-            cover_rect((3456, 5184), DISPLAY_IMAGE_SIZE, centre, 1.0),
+            cover_rect((3456, 5184), DEFAULT_SIZE, centre, 1.0),
             (0, 1440, 3456, 2304)
         );
-        // A 3:2 photo against the 2:3 panel: the width comes off.
+        // A 3:2 photo against a 2:3 target: the width comes off.
         assert_eq!(cover_rect((5184, 3456), (400, 600), centre, 1.0), (1440, 0, 2304, 3456));
         // A photo that already matches keeps every pixel.
-        assert_eq!(
-            cover_rect((1200, 800), DISPLAY_IMAGE_SIZE, centre, 1.0),
-            (0, 0, 1200, 800)
-        );
+        assert_eq!(cover_rect((1200, 800), DEFAULT_SIZE, centre, 1.0), (0, 0, 1200, 800));
 
         // Whatever the pair or the origin, the kept rectangle is inside the photo and holds the target's ratio to
         // within a pixel.
         for source in [(3456, 5184), (8256, 5504), (1000, 1000), (1201, 801), (37, 4000)] {
-            for target in [DISPLAY_IMAGE_SIZE, (400, 600), (100, 100)] {
+            for target in [DEFAULT_SIZE, (400, 600), (100, 100)] {
                 for origin in [
                     centre,
                     CropOrigin::Top,
@@ -611,7 +594,7 @@ mod tests {
             (CropOrigin::Left, (0, 1440)),
             (CropOrigin::Right, (0, 1440)),
         ] {
-            let (x, y, w, h) = cover_rect(source, DISPLAY_IMAGE_SIZE, origin, 1.0);
+            let (x, y, w, h) = cover_rect(source, DEFAULT_SIZE, origin, 1.0);
             assert_eq!(((x, y), (w, h)), (expected, size), "{origin} landed wrong");
         }
 
@@ -825,9 +808,9 @@ mod tests {
             ..Default::default()
         };
         let portrait = RgbImage::new(400, 800);
-        assert_eq!(fitted_size(portrait.dimensions(), DISPLAY_IMAGE_SIZE, fit), (400, 600));
+        assert_eq!(fitted_size(portrait.dimensions(), DEFAULT_SIZE, fit), (400, 600));
         assert_eq!(
-            fitted_rect(portrait.dimensions(), DISPLAY_IMAGE_SIZE, fit),
+            fitted_rect(portrait.dimensions(), DEFAULT_SIZE, fit),
             (0, 100, 400, 600)
         );
     }
@@ -906,7 +889,7 @@ mod tests {
             ..Default::default()
         };
 
-        let out = resize_to_fit(&photo, DISPLAY_IMAGE_SIZE, fit);
+        let out = resize_to_fit(&photo, DEFAULT_SIZE, fit);
         assert_eq!(out.dimensions(), (400, 600));
 
         // 3:4 is taller than the 2:3 it is going into, so the crop comes off the width.
@@ -929,9 +912,10 @@ mod tests {
             );
         }
 
-        assert_eq!(preset_ratio("panel"), Some((3, 2)));
+        assert_eq!(preset_ratio("iphone"), Some((4, 3)));
         assert_eq!(preset_ratio("instagram-story"), Some((9, 16)));
         assert_eq!(preset_ratio("instagram-reel"), None);
+        assert_eq!(preset_ratio("panel"), None);
         assert_eq!(preset_names().len(), RATIO_PRESETS.len());
     }
 
@@ -940,15 +924,13 @@ mod tests {
         // The shape comes from the preset, the scale from the size it is fitted inside.
         let sized = |name: &str, bounds| ratio_size(bounds, preset_ratio(name).expect("the preset exists"));
         for (name, expected) in [
-            ("panel", DISPLAY_IMAGE_SIZE),
-            ("panel-portrait", DISPLAY_PANEL_SIZE),
             ("instagram-post", (400, 400)),
             ("instagram-portrait", (400, 500)),
             ("instagram-landscape", (600, 314)),
             ("instagram-story", (337, 600)),
             ("iphone", (533, 400)),
         ] {
-            assert_eq!(sized(name, DISPLAY_IMAGE_SIZE), expected, "{name} landed wrong");
+            assert_eq!(sized(name, DEFAULT_SIZE), expected, "{name} landed wrong");
         }
 
         // The same names against a larger working size cost more pixels and keep their shape.
@@ -983,17 +965,17 @@ mod tests {
         };
 
         // `iphone` is landscape, so a portrait photo dithers at the transpose of what it resolved to.
-        let target = ratio_size(DISPLAY_IMAGE_SIZE, preset_ratio("iphone").expect("the preset exists"));
+        let target = ratio_size(DEFAULT_SIZE, preset_ratio("iphone").expect("the preset exists"));
         assert_eq!(target, (533, 400));
         assert_eq!(resize_to_fit(&portrait, target, fit).dimensions(), (400, 533));
 
         // Turning the ratio over instead lands on the same size, so which end the transpose happens at does not matter.
-        let turned = ratio_size(DISPLAY_IMAGE_SIZE, (3, 4));
+        let turned = ratio_size(DEFAULT_SIZE, (3, 4));
         assert_eq!(turned, (400, 533));
 
         // And a portrait photo against a portrait preset is already the right way round.
         let story = ratio_size(
-            DISPLAY_IMAGE_SIZE,
+            DEFAULT_SIZE,
             preset_ratio("instagram-story").expect("the preset exists"),
         );
         assert_eq!(resize_to_fit(&portrait, story, fit).dimensions(), story);
@@ -1002,9 +984,6 @@ mod tests {
     #[test]
     fn resizes_to_the_requested_size() {
         let image = RgbImage::new(1200, 800);
-        assert_eq!(
-            resize_image(&image, DISPLAY_IMAGE_SIZE).dimensions(),
-            DISPLAY_IMAGE_SIZE
-        );
+        assert_eq!(resize_image(&image, DEFAULT_SIZE).dimensions(), DEFAULT_SIZE);
     }
 }

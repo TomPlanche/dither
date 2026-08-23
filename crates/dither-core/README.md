@@ -4,9 +4,7 @@ A dithering pipeline: it reduces a full-colour photo to a fixed palette, a handf
 
 Ships as both a library (`dither_core`) and a CLI (`dither-core`).
 
-The palette is the Spectra 6 one, seven slots blended from six inks, and the result can be packed into that panel's frame buffer for anyone who has the hardware. Nothing above that last stage knows about it: the dither is there for the look.
-
-The idea comes from [kaloyaan/reframe](https://github.com/kaloyaan/reframe), whose camera dithers to the same palette in Python. Credit for the approach, the palette blend and the buffer layout goes there. This crate is not a translation of it: the framing (orientation, cropping, ratio presets), the extra error-diffusion kernels and the two-step downscale are its own, and it is built to be driven from a CLI or over HTTP.
+The palette is six colours, each blended between a pure primary and a muted version of it. How far that blend goes is `--saturation`, so the same pipeline covers everything from poster-flat primaries to something closer to ink on paper.
 
 This crate is a member of the workspace at the repository root, alongside `dither-server`, which serves the same pipeline over HTTP. The commands below are run from that root.
 
@@ -41,7 +39,7 @@ A portrait photo, kept portrait rather than squashed into the landscape working 
 
 ```bash
 dither-core photo.jpg --keep-orientation
-# a 3456x5184 photo comes out 400x600, the panel's own portrait size
+# a 3456x5184 photo comes out 400x600, the working size transposed
 ```
 
 Undistorted whatever the photo's shape, which is the two flags together:
@@ -73,7 +71,7 @@ dither-core photo.jpg --preset instagram-story --crop --crop-from 0,200 -v
 #   crop: 1039x1848 from 0,200
 ```
 
-A shape a platform expects, rather than the panel's, at whatever size `--size` asks for:
+A shape a platform expects, at whatever size `--size` asks for:
 
 ```bash
 dither-core photo.jpg --preset instagram-story --crop
@@ -83,20 +81,13 @@ dither-core photo.jpg --preset instagram-story --crop --size 1080x1080
 # 607x1080, the same 9:16 with the pixels to post it at
 ```
 
-Also emit the packed frame buffer, ready to hand to `epd.display()`:
-
-```bash
-dither-core photo.jpg --buffer
-# writes photo_dithered.png and photo_dithered.bin (120000 bytes)
-```
-
 ### Options
 
 | Flag | Default | Meaning |
 | --- | --- | --- |
 | `-o, --output <PATH>` | alongside the input | Output file for one input, or a directory for several |
 | `-m, --method <M>` | `floyd-steinberg` | See the methods table below |
-| `--saturation <F>` | `0.6` | Blend between the pure and the muted panel palettes |
+| `--saturation <F>` | `0.6` | Blend between the pure and the muted palettes |
 | `--brightness <F>` | `1.1` | Brightness multiplier applied before dithering |
 | `--color <F>` | `1.4` | Colour intensity multiplier applied before dithering |
 | `--bayer-size <N>` | `4` | Bayer matrix size: 2, 4 or 8. Ordered only |
@@ -110,25 +101,22 @@ dither-core photo.jpg --buffer
 | `--crop-from <WHERE>` | `center` | Which part the crop keeps: `center`, `top`, `bottom`, `left`, `right`, or a corner as `X,Y`. Needs `--crop` |
 | `--crop-zoom <F>` | `1.0` | `1.0` to `10.0`. Above 1.0 the crop keeps a proportionally smaller rectangle. Needs `--crop`. Not needed with a corner |
 | `--upscale-2x` | off | Nearest-neighbour doubling of the result |
-| `-f, --format <F>` | `indexed` | `indexed` (palette PNG, what the panel wants) or `rgb` |
-| `--buffer` | off | Also write the packed e-paper frame buffer |
+| `-f, --format <F>` | `indexed` | `indexed` (palette PNG, smaller) or `rgb` |
 | `--dry-run` | off | Report what would be written |
 
 ### Presets
 
-`--preset` names an aspect ratio, so the shapes do not have to be worked out by hand. It does not replace `--size`: the largest rectangle of that ratio that fits inside it is what gets dithered, so the preset picks the shape and `--size` still picks the scale. The rest of the table is there for a dithered photo that is going somewhere other than the panel.
+`--preset` names an aspect ratio, so the shapes do not have to be worked out by hand. It does not replace `--size`: the largest rectangle of that ratio that fits inside it is what gets dithered, so the preset picks the shape and `--size` still picks the scale.
 
 | `--preset` value | Ratio | Inside the default 600x400 | What it is |
 | --- | --- | --- | --- |
-| `panel` | 3:2 | 600x400 | The default working shape, and what `--buffer` expects |
-| `panel-portrait` | 2:3 | 400x600 | The panel's own portrait layout |
 | `instagram-post` | 1:1 | 400x400 | Square post |
 | `instagram-portrait` | 4:5 | 400x500 | The tallest post the feed takes |
 | `instagram-landscape` | 191:100 | 600x314 | 1.91:1 |
 | `instagram-story` | 9:16 | 337x600 | Stories and reels |
 | `iphone` | 4:3 | 533x400 | The iPhone's default photo shape |
 
-`--size` is turned over first when the ratio disagrees with it, so a portrait ratio is not squeezed into the landscape default's short side: `--preset panel-portrait` against 600x400 is the panel's own 400x600, not 266x400. That is what keeps both panel entries packable by `--buffer`.
+`--size` is turned over first when the ratio disagrees with it, so a portrait ratio is not squeezed into the landscape default's short side: `--preset instagram-story` against 600x400 is 337x600, not 225x400.
 
 A preset names one orientation, and `--keep-orientation` transposes whichever one is asked for: `--preset iphone --keep-orientation` dithers a portrait photo at 400x533. Add `--crop` and nothing is stretched.
 
@@ -144,9 +132,9 @@ What a run costs follows `--size` rather than the name, since that is what decid
 | `burkes` | error diffusion | Like Stucki but cheaper, grainier |
 | `jarvis` | error diffusion | Widest spread, smoothest |
 | `ordered` | Bayer threshold | Structured rather than organic. Strong colour cast |
-| `none` | none | Writes the photo resized and cropped, for checking the framing. Always an RGB PNG, and refused with `--buffer` |
+| `none` | none | Writes the photo resized and cropped, for checking the framing. Always an RGB PNG |
 
-reframe has `floyd-steinberg` and `ordered`; the rest come free from the shared kernel table.
+Every error-diffusion entry is the same loop reading a different kernel, so the four beyond Floyd-Steinberg come free from the shared table.
 
 ## Library
 
@@ -159,7 +147,7 @@ dither-core = { path = "crates/dither-core" }
 use dither_core::{ATKINSON, DitherMethod, DitherOptions, apply_dithering, io, resize};
 
 let photo = io::load_rgb("photo.jpg")?;
-let sized = resize::resize_image(&photo, resize::DISPLAY_IMAGE_SIZE);
+let sized = resize::resize_image(&photo, resize::DEFAULT_SIZE);
 
 let options = DitherOptions {
     method: DitherMethod::ErrorDiffusion(ATKINSON),
@@ -170,22 +158,15 @@ let dithered = apply_dithering(&sized, &options);
 io::save_indexed_png(&dithered, "photo_dithered.png")?;
 ```
 
-Straight to the panel:
+`apply_dithering` hands back an `IndexedImage`: one palette slot per pixel plus the palette itself. `io::save_indexed_png` writes it as a palette PNG, `to_rgb` expands it back to full colour, and `scale_nearest` upscales it without leaving the palette.
 
-```rust
-use dither_core::{DitherOptions, dither_to_display_buffer};
-
-let (buffer, dithered, _orientation) = dither_to_display_buffer(&sized, &DitherOptions::default());
-// `buffer` is 120000 bytes: two 4-bit colour codes per byte, portrait.
-```
-
-`resize::resize_image` always produces the size you name, stretching the photo into it. `resize::resize_to_fit` takes a `FitOptions` instead: `keep_orientation` transposes the size for a photo of the other orientation, so a portrait photo comes out 400x600 and a landscape one 600x400, and `crop` takes the largest centred rectangle that already has the target's ratio rather than stretching what is left over. Both 600x400 and 400x600 are sizes the panel takes, and `dither_to_display_buffer` reports which one it got through its `Orientation`.
+`resize::resize_image` always produces the size you name, stretching the photo into it. `resize::resize_to_fit` takes a `FitOptions` instead: `keep_orientation` transposes the size for a photo of the other orientation, so a portrait photo comes out 400x600 and a landscape one 600x400, and `crop` takes the largest centred rectangle that already has the target's ratio rather than stretching what is left over.
 
 ```rust
 use dither_core::FitOptions;
 
 let fit = FitOptions { keep_orientation: true, crop: true, ..Default::default() };
-let sized = resize::resize_to_fit(&photo, resize::DISPLAY_IMAGE_SIZE, fit);
+let sized = resize::resize_to_fit(&photo, resize::DEFAULT_SIZE, fit);
 ```
 
 Which part the crop keeps is `FitOptions::crop_from`, a `CropOrigin`, and its two forms work from opposite ends. An anchor (`Center` by default, `Top`, `Bottom`, `Left`, `Right`) takes the largest rectangle the target's ratio allows and puts it against a side; since such a rectangle spans the photo's full width or full height, an anchor only moves it along the axis that has slack, and `Top` on a photo losing its sides behaves like `Center`. `At { x, y }` is the other way round: the corner is where the crop starts, so it is kept as given and the rectangle is the largest that fits below and to the right of it. That is what makes `At { x: 0, y: 200 }` drop the top 200 rows of any photo, at the cost of size, and a corner past the last pixel keeps that pixel.
@@ -198,7 +179,7 @@ The named ratios are `resize::RATIO_PRESETS`, a table of `(name, (width, height)
 
 ```rust
 let ratio = resize::preset_ratio("instagram-story").expect("a name from the table");
-let size = resize::ratio_size(resize::DISPLAY_IMAGE_SIZE, ratio); // 337x600
+let size = resize::ratio_size(resize::DEFAULT_SIZE, ratio); // 337x600
 ```
 
 Inputs are `image::RgbImage`, so anything that crate can decode works, and `RgbImage::from_raw` takes pixels you already have.
@@ -227,9 +208,9 @@ Four direct dependencies do most of the work:
 | `png` | Palette PNG output, which `image` cannot write |
 | `clap` | The CLI |
 
-What is left is the part specific to this panel: its palette and saturation blend (`panel`), the Bayer tables (`bayer`), the frame buffer layout (`display`), the PIL-compatible enhancers (`enhance`), and the error-diffusion loop (`diffusion`).
+What is left is written here: the palette and its saturation blend (`palette`), the indexed image the dither produces (`indexed`), the Bayer tables (`bayer`), the enhancers (`enhance`), and the error-diffusion loop (`diffusion`).
 
-That last one is a deliberate exception. `image::imageops::dither` clamps the accumulated error back into a `u8` after every diffusion step, which on a seven-colour palette throws away most of the error and visibly drains the colour out of the result. The `dither` crate gets the arithmetic right but hard-depends on `clap 3.0.0-beta` and `image 0.23`, so it cannot sit alongside `image` 0.25. The loop in `diffusion.rs` is about 40 lines and keeps the running error in `f32`; the kernel table it reads is what gives you Atkinson, Stucki, Burkes and Jarvis for free.
+That last one is a deliberate exception. `image::imageops::dither` clamps the accumulated error back into a `u8` after every diffusion step, which on a palette this small throws away most of the error and visibly drains the colour out of the result. The `dither` crate gets the arithmetic right but hard-depends on `clap 3.0.0-beta` and `image 0.23`, so it cannot sit alongside `image` 0.25. The loop in `diffusion.rs` is about 40 lines and keeps the running error in `f32`; the kernel table it reads is what gives you Atkinson, Stucki, Burkes and Jarvis for free.
 
 ## Performance
 
@@ -241,32 +222,6 @@ cargo bench -p dither-core
 
 [BENCHMARKS.md](BENCHMARKS.md) logs every measurement, one entry per change that moves the numbers, along with the method and the machine each was taken on.
 
-## Agreement with reframe
-
-The palette blend and the frame buffer layout have to match reframe's, since both drive the same panel and its colour codes are not negotiable. `tests/parity.rs` keeps that honest by measuring this crate against fixtures generated from reframe's own `ImageProcessor`. It is a cross-check on the parts that must agree, not a claim that the two produce the same image everywhere. Regenerate the fixtures with:
-
-```bash
-python3 tests/generate_golden.py   # needs Pillow and NumPy
-cargo test -- --nocapture
-```
-
-Current agreement:
-
-| Case | Agreement |
-| --- | --- |
-| Ordered dithering, all Bayer sizes | 100% of pixels identical |
-| Bilinear upscale | identical |
-| Bilinear downscale | 0.15 mean abs diff per byte |
-| 2x downscale | 2.81 mean abs diff per byte |
-| Floyd-Steinberg | 60 to 68% of pixels identical |
-| Packed frame buffer | 56% of bytes identical |
-
-Ordered dithering is bit-exact: `palette`'s CIELAB agrees with the NumPy formula to the last argmin. Resampling is near-identical except on exact 2x reductions, where Pillow uses a box average and `image` uses a triangle filter.
-
-Floyd-Steinberg diverges, and the percentage understates how close it is. Error diffusion is chaotic: a one-unit difference in a single pixel propagates across the whole image, so any change at all halves the pixel-level agreement while leaving the result visually indistinguishable. Feeding the same photo through both pipelines and comparing side by side shows matching colour, contrast and texture.
-
-Two smaller differences are deliberate. Pillow pads its palette to 256 entries with pure black and then searches all of them, so dark pixels land on palette slot 7 rather than the blended black in slot 0; this crate matches against the seven real colours only. Both fold onto hardware colour code 0, so the panel sees no difference. And Pillow's `BILINEAR` is used for every resize here, including the exact-2x case the Python special-cases into a box reduction.
-
 ### A caveat about JPEG
 
-Pillow decodes JPEG with libjpeg-turbo; the `image` crate uses `zune-jpeg`. They disagree on roughly 0.3% of pixels by a step or two. That is invisible under ordered dithering, and under error diffusion it is enough on its own to move about half the output pixels. Feed both sides a PNG if you want to compare them.
+JPEG decoders disagree slightly: Pillow uses libjpeg-turbo, the `image` crate uses `zune-jpeg`, and they differ on roughly 0.3% of pixels by a step or two. That is invisible under ordered dithering, but error diffusion is chaotic enough that a one-unit difference in a single pixel propagates across the whole image. Feed a PNG in if you need output that reproduces exactly.

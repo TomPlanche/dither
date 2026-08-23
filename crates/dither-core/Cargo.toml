@@ -3,7 +3,7 @@ name = "dither-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Dithers photos to a fixed colour palette, inspired by the reframe camera"
+description = "Dithers photos to a fixed six-colour palette"
 readme = "README.md"
 
 [lib]

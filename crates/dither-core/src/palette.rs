@@ -1,21 +1,22 @@
-//! The panel's colour palette and the nearest-colour searches over it.
+//! The fixed palette everything is reduced to.
 //!
-//! Two metrics live here because the two dithering methods want different
-//! things. Error diffusion matches in plain RGB, so that the error it carries
-//! forward is the one it just made. Ordered dithering matches in CIELAB via the
-//! [`palette`] crate, which separates lightness from chromaticity and stops
-//! neutral greys from matching the panel's green.
+//! Six colours, each blended between a pure primary and a muted version of it.
+//! The blend is what `saturation` picks, and the two nearest-colour searches
+//! over the result are what the dithering stages quantise through.
+//!
+//! The `palette` crate is referred to as `::palette` throughout, since this
+//! module shares its name.
 
+use ::palette::color_difference::EuclideanDistance;
+use ::palette::{IntoColor, Lab, Srgb};
 use image::Rgb;
 use image::imageops::ColorMap;
-use palette::color_difference::EuclideanDistance;
-use palette::{IntoColor, Lab, Srgb};
 
-/// Number of colours the panel can render.
-pub const PALETTE_COLORS: usize = 7;
+/// Number of colours in the palette.
+pub const PALETTE_COLORS: usize = 6;
 
-/// Pure panel primaries.
-pub const DESATURATED_PALETTE: [[u8; 3]; 6] = [
+/// The pure primaries, fully saturated.
+pub const PURE_PALETTE: [[u8; 3]; 6] = [
     [0, 0, 0],       // Black
     [255, 255, 255], // White
     [0, 255, 0],     // Green
@@ -24,8 +25,8 @@ pub const DESATURATED_PALETTE: [[u8; 3]; 6] = [
     [255, 255, 0],   // Yellow
 ];
 
-/// What those primaries actually look like on the e-paper film.
-pub const SATURATED_PALETTE: [[u8; 3]; 6] = [
+/// The muted counterparts, which is what those primaries look like on ink.
+pub const MUTED_PALETTE: [[u8; 3]; 6] = [
     [57, 48, 57],    // Muted Black
     [255, 255, 255], // White
     [40, 91, 58],    // Muted Green
@@ -36,18 +37,21 @@ pub const SATURATED_PALETTE: [[u8; 3]; 6] = [
 
 /// Maps each output palette slot to its source primary.
 ///
-/// Slot 4 repeats black because the panel reserves that nibble as a duplicate
-/// black / clear code, so the slot has to exist but must never reach the panel.
-pub const PALETTE_ORDER: [usize; PALETTE_COLORS] = [0, 1, 5, 4, 0, 3, 2];
+/// The slots are ordered black, white, yellow, red, blue, green rather than
+/// following the primaries' own order, so slot 0 and slot 1 are the two
+/// extremes a nearest-colour search falls back on.
+pub const PALETTE_ORDER: [usize; PALETTE_COLORS] = [0, 1, 5, 4, 3, 2];
 
-/// Blends the desaturated and saturated palettes.
+/// Blends the pure and the muted palettes.
+///
+/// At `0.0` the result is [`PURE_PALETTE`], at `1.0` it is [`MUTED_PALETTE`].
 pub fn palette_blend(saturation: f64) -> [[u8; 3]; PALETTE_COLORS] {
     let mut out = [[0u8; 3]; PALETTE_COLORS];
     for (slot, &src) in PALETTE_ORDER.iter().enumerate() {
         for channel in 0..3 {
-            let sat = SATURATED_PALETTE[src][channel] as f64 * saturation;
-            let desat = DESATURATED_PALETTE[src][channel] as f64 * (1.0 - saturation);
-            out[slot][channel] = (sat + desat) as u8;
+            let muted = MUTED_PALETTE[src][channel] as f64 * saturation;
+            let pure = PURE_PALETTE[src][channel] as f64 * (1.0 - saturation);
+            out[slot][channel] = (muted + pure) as u8;
         }
     }
     out
@@ -59,14 +63,14 @@ pub fn to_lab(rgb: [u8; 3]) -> Lab {
     srgb.into_color()
 }
 
-/// The blended panel palette, with both nearest-colour searches over it.
+/// The blended palette, with both nearest-colour searches over it.
 #[derive(Debug, Clone)]
-pub struct PanelPalette {
+pub struct Palette {
     colors: [[u8; 3]; PALETTE_COLORS],
     lab: [Lab; PALETTE_COLORS],
 }
 
-impl PanelPalette {
+impl Palette {
     /// Builds the palette for a given saturation.
     pub fn new(saturation: f64) -> Self {
         let colors = palette_blend(saturation);
@@ -112,7 +116,7 @@ impl PanelPalette {
     ///
     /// Used by the ordered method, where there is no error term to fall back on
     /// and perceptual matching matters more. It also keeps neutral greys from
-    /// matching the panel's green, which sits at a similar RGB luminance.
+    /// matching the palette's green, which sits at a similar RGB luminance.
     pub fn nearest(&self, rgb: [u8; 3]) -> usize {
         self.nearest_lab(to_lab(rgb))
     }
@@ -142,7 +146,7 @@ impl PanelPalette {
 /// Lets the palette plug into `image`'s own quantisation helpers, such as
 /// `imageops::index_colors`. Matching uses the RGB metric, which is what error
 /// diffusion wants.
-impl ColorMap for PanelPalette {
+impl ColorMap for Palette {
     type Color = Rgb<u8>;
 
     fn index_of(&self, color: &Rgb<u8>) -> usize {
@@ -167,7 +171,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn blend_matches_the_python_reference() {
+    fn the_blend_lands_between_the_two_palettes() {
         assert_eq!(
             palette_blend(0.6),
             [
@@ -175,7 +179,6 @@ mod tests {
                 [255, 255, 255],
                 [226, 216, 42],
                 [195, 43, 45],
-                [34, 28, 34],
                 [0, 76, 255],
                 [24, 156, 34],
             ]
@@ -183,16 +186,37 @@ mod tests {
     }
 
     #[test]
+    fn the_ends_of_the_blend_are_the_palettes_themselves() {
+        for (slot, &src) in PALETTE_ORDER.iter().enumerate() {
+            assert_eq!(palette_blend(0.0)[slot], PURE_PALETTE[src]);
+            assert_eq!(palette_blend(1.0)[slot], MUTED_PALETTE[src]);
+        }
+    }
+
+    #[test]
+    fn every_slot_is_a_distinct_colour() {
+        let colors = palette_blend(0.6);
+        for (slot, color) in colors.iter().enumerate() {
+            assert!(
+                !colors[..slot].contains(color),
+                "slot {slot} repeats an earlier colour, so it can never be picked"
+            );
+        }
+    }
+
+    #[test]
     fn primaries_map_to_their_own_slots() {
-        let palette = PanelPalette::new(0.6);
-        assert_eq!(palette.nearest([255, 255, 255]), 1);
+        let palette = Palette::new(0.6);
         assert_eq!(palette.nearest([0, 0, 0]), 0);
-        // Ties between the duplicate blacks resolve to the lower slot.
-        assert_ne!(palette.nearest([10, 10, 10]), 4);
+        assert_eq!(palette.nearest([255, 255, 255]), 1);
+        assert_eq!(palette.nearest([255, 255, 0]), 2);
+        assert_eq!(palette.nearest([255, 0, 0]), 3);
+        assert_eq!(palette.nearest([0, 0, 255]), 4);
+        assert_eq!(palette.nearest([0, 255, 0]), 5);
     }
 
     #[test]
     fn plte_is_padded_to_256_entries() {
-        assert_eq!(PanelPalette::new(0.6).plte().len(), 768);
+        assert_eq!(Palette::new(0.6).plte().len(), 768);
     }
 }

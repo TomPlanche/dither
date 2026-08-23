@@ -1,6 +1,6 @@
 # dither
 
-A Cargo workspace around a dithering pipeline: the pipeline itself, which reduces a photo to a fixed palette, and an HTTP backend that puts it behind a few routes for a Svelte front end. It takes its inspiration from [kaloyaan/reframe](https://github.com/kaloyaan/reframe), a camera that dithers to the same palette in Python.
+A Cargo workspace around a dithering pipeline: the pipeline itself, which reduces a photo to a fixed six-colour palette, and an HTTP backend that puts it behind a few routes for a Svelte front end.
 
 ```
 crates/
@@ -8,7 +8,7 @@ crates/
   dither-server/    library + binary: the HTTP backend
 ```
 
-`dither-server` is stateless. It takes an uploaded photo, runs it through `dither-core`, and hands back either a dithered PNG or the packed e-paper frame buffer. Nothing is written to disk and nothing is kept between requests.
+`dither-server` is stateless. It takes an uploaded photo, runs it through `dither-core`, and hands back a dithered PNG. Nothing is written to disk and nothing is kept between requests.
 
 ## Running the backend
 
@@ -38,17 +38,18 @@ Configuration comes from the environment, all of it optional:
 
 ### `GET /api/options`
 
-Defaults, accepted values, limits and the panel palette. The `defaults` object uses exactly the query parameter names, so a client can feed it straight into `URLSearchParams` and edit from there.
+Defaults, accepted values, limits and the palette. The `defaults` object uses exactly the query parameter names, so a client can feed it straight into `URLSearchParams` and edit from there.
 
 ```json
 {
   "methods": ["floyd-steinberg", "atkinson", "stucki", "burkes", "jarvis", "ordered", "none"],
   "formats": ["indexed", "rgb"],
   "bayer_sizes": [2, 4, 8],
-  "presets": [{ "name": "panel", "ratio": [3, 2] }, { "name": "instagram-story", "ratio": [9, 16] }, "..."],
+  "presets": [{ "name": "instagram-post", "ratio": [1, 1] }, { "name": "instagram-story", "ratio": [9, 16] }, "..."],
   "defaults": { "method": "floyd-steinberg", "saturation": 0.6, "brightness": 1.1, "color": 1.4, "bayer_size": 4, "threshold_scale": 1.0, "width": 600, "height": 400, "resize": true, "keep_orientation": false, "crop": false, "scale": 1, "format": "indexed" },
   "limits": { "max_upload_bytes": 26214400, "max_dimension": 4096, "max_scale": 4, "max_source_pixels": 50000000, "max_crop_zoom": 10.0 },
-  "panel": { "image_size": [600, 400], "panel_size": [400, 600], "palette": ["#221c22", "#ffffff", "#e2d82a", "#c32b2d", "#221c22", "#004cff", "#189c22"] }
+  "default_size": [600, 400],
+  "palette": ["#221c22", "#ffffff", "#e2d82a", "#c32b2d", "#004cff", "#189c22"]
 }
 ```
 
@@ -58,17 +59,9 @@ The palette is the blend at the default saturation, ready to drop into CSS.
 
 Returns the dithered image as `image/png`, with an `x-image-size` header carrying `WIDTHxHEIGHT` and an `x-crop-rect` header carrying `X,Y,WIDTH,HEIGHT`, the part of the upload that was read.
 
-### `POST /api/buffer`
-
-Returns the packed frame buffer as `application/octet-stream`: two 4-bit colour codes per byte, 120000 bytes for the 400x600 panel. The `x-panel-orientation` header says whether the image was already portrait (`panel`) or had to be turned a quarter turn (`rotated`).
-
-The panel accepts one layout only, so a request that dithers to something other than 600x400 or 400x600 is refused with a 400. `format` and `scale` do not apply here and are ignored.
-
-With `keep_orientation=true` a portrait upload resizes straight to the panel's own 400x600, so it reports `panel` and reaches the hardware without a quarter turn.
-
 ### Sending the image
 
-Both POST routes accept the image two ways:
+The POST route accepts the image two ways:
 
 - a raw body, which is the shortest path from a browser: `fetch(url, { method: 'POST', body: file })`
 - `multipart/form-data` with a field named `image` (or `file`), which is what a plain `<form>` submits
@@ -80,7 +73,7 @@ Settings ride in the query string on both POST routes. Every one is optional.
 | Parameter | Default | Accepts |
 | --- | --- | --- |
 | `method` | `floyd-steinberg` | `floyd-steinberg`, `atkinson`, `stucki`, `burkes`, `jarvis`, `ordered`, or `none` for no dithering at all |
-| `saturation` | `0.6` | `0.0` to `1.0`. Blends between the muted and the pure panel palettes. |
+| `saturation` | `0.6` | `0.0` to `1.0`. Blends between the pure and the muted palettes. |
 | `brightness` | `1.1` | `0.0` to `5.0`. Applied before dithering. |
 | `color` | `1.4` | `0.0` to `5.0`. Applied before dithering, after brightness. |
 | `bayer_size` | `4` | `2`, `4` or `8`. Ordered dithering only. |
@@ -98,7 +91,7 @@ Settings ride in the query string on both POST routes. Every one is optional.
 
 An unknown parameter is an error rather than a silent no-op, so a typo shows up immediately.
 
-`keep_orientation` and `crop` are what an upload of any shape needs to come out undistorted: the first picks the panel layout the photo is closer to, the second trims the long side rather than stretching the short one. Neither changes the size that comes back, so a client can keep reading it off `x-image-size`.
+`keep_orientation` and `crop` are what an upload of any shape needs to come out undistorted: the first follows the photo's own orientation, the second trims the long side rather than stretching the short one. Neither changes the size that comes back, so a client can keep reading it off `x-image-size`.
 
 `resize` answers one question, how much smaller the photo should come back, three ways:
 
@@ -110,7 +103,7 @@ An unknown parameter is an error rather than a silent no-op, so a typo shows up 
 
 It governs the scaling alone, so `crop` keeps framing under all three: the first says how much smaller, the second says what shape. A 1536x2048 photo with `preset=instagram-story&crop=true` comes back 1152x2048 under `resize=false` and 864x1536 under `resize=0.75`, against 337x600 under `resize=true`. `x-crop-rect` reports the region that was read whichever it is.
 
-`method=none` skips the dither and returns the photo resized and cropped, and nothing else. It is for checking the framing, where the dither pattern is in the way. `resize`, `preset`, `crop`, `crop_from`, `crop_zoom`, `scale` and the `x-crop-rect` header all work the same; the palette settings have nothing to act on, and `format` has no palette to index, so the result is always a plain RGB PNG. `POST /api/buffer` refuses it with a 400, since the panel takes palette slots.
+`method=none` skips the dither and returns the photo resized and cropped, and nothing else. It is for checking the framing, where the dither pattern is in the way. `resize`, `preset`, `crop`, `crop_from`, `crop_zoom`, `scale` and the `x-crop-rect` header all work the same; the palette settings have nothing to act on, and `format` has no palette to index, so the result is always a plain RGB PNG.
 
 `crop_from` says which part the crop keeps, and the two forms work from opposite ends.
 
@@ -130,15 +123,13 @@ Both POST routes answer with `x-crop-rect: X,Y,WIDTH,HEIGHT`, the part of the up
 
 | `preset` value | Ratio | Inside the default 600x400 | What it is |
 | --- | --- | --- | --- |
-| `panel` | 3:2 | 600x400 | The default working shape, and the one `/api/buffer` expects |
-| `panel-portrait` | 2:3 | 400x600 | The panel's own portrait layout |
 | `instagram-post` | 1:1 | 400x400 | Square post |
 | `instagram-portrait` | 4:5 | 400x500 | The tallest post the feed takes |
 | `instagram-landscape` | 191:100 | 600x314 | 1.91:1 |
 | `instagram-story` | 9:16 | 337x600 | Stories and reels |
 | `iphone` | 4:3 | 533x400 | The iPhone's default photo shape |
 
-The pair is turned over first when the ratio disagrees with it, so a portrait ratio is not squeezed into the landscape default's short side: `preset=panel-portrait` against 600x400 is the panel's own 400x600, not 266x400. That is what keeps both panel entries packable by `/api/buffer`.
+The pair is turned over first when the ratio disagrees with it, so a portrait ratio is not squeezed into the landscape default's short side: `preset=instagram-story` against 600x400 is 337x600, not 225x400.
 
 Since a preset is fitted inside `width` and `height` rather than carrying its own pixel count, asking for more resolution is a matter of asking for a bigger pair: `preset=instagram-story` alone returns 337x600, and `preset=instagram-story&width=1080&height=1080` returns 607x1080 of the same shape. What a request costs therefore follows the pair, not the name. `x-image-size` reports what it landed on.
 
@@ -170,8 +161,6 @@ export type DitherMethod =
   | 'ordered';
 
 export type DitherPreset =
-  | 'panel'
-  | 'panel-portrait'
   | 'instagram-post'
   | 'instagram-portrait'
   | 'instagram-landscape'
@@ -226,12 +215,6 @@ export const dither = async (file: File, params: Partial<DitherParams> = {}): Pr
   return URL.createObjectURL(await response.blob());
 };
 
-/** The packed frame buffer, ready to push to the panel. */
-export const panelBuffer = async (file: File, params: Partial<DitherParams> = {}): Promise<ArrayBuffer> => {
-  const response = await send('/api/buffer', file, params);
-  return await response.arrayBuffer();
-};
-
 /** Defaults and accepted values, for building the controls. */
 export const options = async (): Promise<unknown> => {
   const response = await fetch(`${API}/api/options`);
@@ -267,7 +250,7 @@ A component using it:
 {#if preview}<img src={preview} alt="Dithered preview" />{/if}
 ```
 
-Note the `format: 'rgb'` in the preview call. Indexed PNGs are what the panel wants, but some browsers render them with slightly different colour management, so `rgb` is the safer choice for an on-screen preview.
+Note the `format: 'rgb'` in the preview call. Indexed PNGs are smaller and the default, but some browsers render them with slightly different colour management, so `rgb` is the safer choice for an on-screen preview.
 
 ### Skipping CORS in development
 
@@ -297,4 +280,4 @@ The API tests in `crates/dither-server/tests/api.rs` drive the router in-process
 
 ## Credits
 
-This project is inspired by [reframe](https://github.com/kaloyaan/reframe), an e-paper camera. I like the camera but cannot afford one, so I built my own dithering pipeline, and reframe is where the idea came from. The palette and the frame buffer layout follow it, since those have to match the panel they were made for. What grew around them is mine: the framing, the extra kernels, and the CLI and HTTP front ends. Go and look at the camera, it is lovely work.
+The dithering itself leans on two crates: [`image`](https://github.com/image-rs/image) for buffers, decoding and resampling, and [`palette`](https://github.com/Ogeon/palette) for the CIELAB colour science behind the nearest-colour search. What is written here is the palette and its saturation blend, the framing, the Bayer tables and the error-diffusion loop.

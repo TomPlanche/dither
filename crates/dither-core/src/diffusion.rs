@@ -7,12 +7,12 @@
 //! `clap` and an old `image`, so it cannot be used alongside `image` 0.25.
 //!
 //! The loop below keeps the running error in `f32`, as Pillow keeps it in `i32`.
-//! Quantisation itself goes through [`PanelPalette`], which is an
+//! Quantisation itself goes through [`Palette`], which is an
 //! `image::imageops::ColorMap`.
 
 use image::{GrayImage, Luma, RgbImage};
 
-use crate::panel::PanelPalette;
+use crate::palette::Palette;
 
 /// An error-diffusion kernel: where to push the error, and by how much.
 ///
@@ -105,7 +105,7 @@ pub const KERNELS: [Kernel; 5] = [FLOYD_STEINBERG, ATKINSON, STUCKI, BURKES, JAR
 /// wasteful and is not: keeping only the live rows was tried three ways and every one measured slower, because the
 /// window has to be addressed as a ring and the per-tap cost of that outweighs the locality it buys. See BENCHMARKS.md,
 /// entry 5.
-pub fn diffuse(image: &RgbImage, palette: &PanelPalette, kernel: &Kernel) -> GrayImage {
+pub fn diffuse(image: &RgbImage, palette: &Palette, kernel: &Kernel) -> GrayImage {
     let (width, height) = image.dimensions();
     let mut spill = vec![[0f32; 3]; (width as usize) * (height as usize)];
     let mut indices = GrayImage::new(width, height);
@@ -180,7 +180,7 @@ mod tests {
     #[test]
     fn a_flat_midtone_uses_more_than_one_slot() {
         let image = RgbImage::from_pixel(32, 32, image::Rgb([128, 128, 128]));
-        let palette = PanelPalette::new(0.6);
+        let palette = Palette::new(0.6);
         let indices = diffuse(&image, &palette, &FLOYD_STEINBERG);
         let mut slots: Vec<u8> = indices.as_raw().to_vec();
         slots.sort_unstable();

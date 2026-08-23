@@ -18,7 +18,6 @@ use crate::config::{Config, Origins};
 pub fn router(config: Arc<Config>) -> Router {
     let api = Router::new()
         .route("/dither", post(dither::dither))
-        .route("/buffer", post(dither::buffer))
         .route("/options", get(dither::options));
 
     Router::new()
@@ -39,7 +38,7 @@ fn cors(config: &Config) -> CorsLayer {
         // Custom headers stay invisible to `fetch` unless they are exposed.
         .expose_headers([
             HeaderName::from_static(dither::X_IMAGE_SIZE),
-            HeaderName::from_static(dither::X_PANEL_ORIENTATION),
+            HeaderName::from_static(dither::X_CROP_RECT),
         ]);
 
     match &config.origins {

@@ -14,10 +14,10 @@ use std::time::{Duration, Instant};
 
 use dither_core::diffusion::{ATKINSON, BURKES, FLOYD_STEINBERG, JARVIS_JUDICE_NINKE, STUCKI};
 use dither_core::dither::OrderedLut;
-use dither_core::{DitherMethod, DitherOptions, PanelPalette, RgbImage, apply_dithering, display, enhance, io, resize};
+use dither_core::{DitherMethod, DitherOptions, Palette, RgbImage, apply_dithering, enhance, io, resize};
 
 /// The size the pipeline dithers at.
-const WORKING: (u32, u32) = resize::DISPLAY_IMAGE_SIZE;
+const WORKING: (u32, u32) = resize::DEFAULT_SIZE;
 
 /// One decoded sample photo, kept at full resolution.
 struct Asset {
@@ -133,7 +133,7 @@ fn main() {
     println!();
 
     let options = DitherOptions::default();
-    let palette = PanelPalette::new(options.saturation);
+    let palette = Palette::new(options.saturation);
 
     // Inputs for the later stages, so each stage is timed on its own.
     let sized: Vec<RgbImage> = assets.iter().map(|a| resize::resize_image(&a.full, WORKING)).collect();
@@ -191,12 +191,6 @@ fn main() {
     results.push(measure("  of which: ordered LUT build", 1, 10, || {
         for _ in 0..count {
             keep(OrderedLut::new(&palette));
-        }
-    }));
-
-    results.push(measure("rotate + pack frame buffer", 2, 20, || {
-        for image in &indexed {
-            keep(display::img2buffer(image));
         }
     }));
 

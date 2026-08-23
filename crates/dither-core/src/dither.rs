@@ -1,7 +1,7 @@
 //! The two dithering methods.
 //!
-//! Both boost brightness and colour, then reduce the image to the panel's
-//! 7-colour palette. They differ in how a slot gets picked:
+//! Both boost brightness and colour, then reduce the image to the fixed
+//! 6-colour palette. They differ in how a slot gets picked:
 //!
 //! * [`DitherMethod::ErrorDiffusion`] pushes each pixel's quantisation error into its neighbours, using one of the
 //!   kernels in [`crate::diffusion`].
@@ -12,10 +12,10 @@ use image::RgbImage;
 use rayon::prelude::*;
 
 use crate::bayer::{self, BayerSize};
-use crate::buffer::IndexedImage;
 use crate::diffusion::{self, FLOYD_STEINBERG, Kernel};
 use crate::enhance;
-use crate::panel::{PanelPalette, to_lab};
+use crate::indexed::IndexedImage;
+use crate::palette::{Palette, to_lab};
 
 /// Which dithering algorithm to run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,29 +35,9 @@ impl Default for DitherMethod {
 impl DitherMethod {
     /// Plain Floyd-Steinberg, this pipeline's default.
     pub const FLOYD_STEINBERG: Self = DitherMethod::ErrorDiffusion(FLOYD_STEINBERG);
-
-    /// Parses the snake_case spelling a settings file carries.
-    pub fn from_settings_name(name: &str) -> Option<Self> {
-        match name {
-            "floyd_steinberg" => Some(Self::FLOYD_STEINBERG),
-            "ordered" => Some(DitherMethod::Ordered),
-            _ => None,
-        }
-    }
-
-    /// The snake_case spelling a settings file carries.
-    ///
-    /// Kernels that spelling has no name of its own for report as
-    /// `floyd_steinberg`, the setting they are closest to.
-    pub fn settings_name(self) -> &'static str {
-        match self {
-            DitherMethod::ErrorDiffusion(_) => "floyd_steinberg",
-            DitherMethod::Ordered => "ordered",
-        }
-    }
 }
 
-/// The `processing` section of the reframe settings.
+/// Everything the dithering stages read.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DitherOptions {
     pub saturation: f64,
@@ -88,7 +68,7 @@ pub fn apply_dithering(image: &RgbImage, options: &DitherOptions) -> IndexedImag
     enhance::brightness(&mut work, options.brightness_factor as f32);
     enhance::color(&mut work, options.color_factor as f32);
 
-    let palette = PanelPalette::new(options.saturation);
+    let palette = Palette::new(options.saturation);
     match options.method {
         DitherMethod::ErrorDiffusion(kernel) => {
             let indices = diffusion::diffuse(&work, &palette, &kernel);
@@ -112,7 +92,7 @@ impl OrderedLut {
     ///
     /// The 32768 sRGB to CIELAB conversions are independent, so they are spread across cores. Reuse the table across a
     /// batch when you can: it depends only on the palette, and the palette only on the saturation.
-    pub fn new(palette: &PanelPalette) -> Self {
+    pub fn new(palette: &Palette) -> Self {
         const CHUNK: usize = 1024;
         let mut table = vec![0u8; 32768];
         table.par_chunks_mut(CHUNK).enumerate().for_each(|(chunk, slots)| {
@@ -137,7 +117,7 @@ impl OrderedLut {
 }
 
 /// Per-channel Bayer amplitude: the widest gap between successive palette values.
-fn channel_thresholds(palette: &PanelPalette, threshold_scale: f32) -> [f32; 3] {
+fn channel_thresholds(palette: &Palette, threshold_scale: f32) -> [f32; 3] {
     let mut out = [0f32; 3];
     for (channel, slot) in out.iter_mut().enumerate() {
         let mut values: Vec<u8> = palette.colors().iter().map(|c| c[channel]).collect();
@@ -151,7 +131,7 @@ fn channel_thresholds(palette: &PanelPalette, threshold_scale: f32) -> [f32; 3] 
 /// Ordered (Bayer) dithering.
 ///
 /// Unlike error diffusion, every pixel here is independent, so the rows run in parallel.
-fn ordered(image: &RgbImage, palette: PanelPalette, size: BayerSize, threshold_scale: f32) -> IndexedImage {
+fn ordered(image: &RgbImage, palette: Palette, size: BayerSize, threshold_scale: f32) -> IndexedImage {
     let lut = OrderedLut::new(&palette);
     let thresholds = channel_thresholds(&palette, threshold_scale);
     let side = size.side();
@@ -183,7 +163,7 @@ fn ordered(image: &RgbImage, palette: PanelPalette, size: BayerSize, threshold_s
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::panel::PALETTE_COLORS;
+    use crate::palette::PALETTE_COLORS;
 
     fn solid(width: u32, height: u32, rgb: [u8; 3]) -> RgbImage {
         RgbImage::from_pixel(width, height, image::Rgb(rgb))
@@ -224,8 +204,8 @@ mod tests {
 
     #[test]
     fn thresholds_use_the_widest_palette_gap() {
-        let palette = PanelPalette::new(0.6);
-        // Red channel sorted: 0, 24, 34, 34, 195, 226, 255 -> widest gap 161.
+        let palette = Palette::new(0.6);
+        // Red channel sorted: 0, 24, 34, 195, 226, 255 -> widest gap 161.
         assert_eq!(channel_thresholds(&palette, 1.0)[0], 161.0);
         assert_eq!(channel_thresholds(&palette, 0.5)[0], 80.5);
     }
