@@ -1,14 +1,41 @@
 # dither
 
-A Cargo workspace around a dithering pipeline: the pipeline itself, which reduces a photo to a fixed six-colour palette, and an HTTP backend that puts it behind a few routes for a Svelte front end.
+A Cargo workspace around a dithering pipeline: the pipeline itself, which reduces a photo to a fixed six-colour palette, an HTTP backend that puts it behind a few routes, and a browser front end that skips the backend entirely and runs the pipeline in WebAssembly.
 
 ```
 crates/
-  dither-core/   library + CLI: the dithering pipeline itself
+  dither-core/      library + CLI: the dithering pipeline itself
   dither-server/    library + binary: the HTTP backend
+  dither-app/       binary: the browser front end, Leptos on wasm32
 ```
 
 `dither-server` is stateless. It takes an uploaded photo, runs it through `dither-core`, and hands back a dithered PNG. Nothing is written to disk and nothing is kept between requests.
+
+## Running the front end
+
+```bash
+cd crates/dither-app
+trunk serve --release
+```
+
+It serves the app on `http://127.0.0.1:8080`. Drop a photo on it, or pick one, and the controls on the right reshape it live.
+
+Nothing is uploaded. `dither-app` is Rust like everything else here, so it links `dither-core` into its own WebAssembly module and calls the pipeline directly, with no HTTP and no `wasm-bindgen` boundary in between. The photo is decoded, resized and dithered in the tab that opened it, and the backend is not involved at all. It is a static bundle: `trunk build --release` writes `dist/`, which any file server can host.
+
+Two things make the sliders keep up. The pipeline is split in two, so a colour change re-dithers the working image, 600x400 by default, rather than resampling the original 12-megapixel photo again. And `dither-core` is built without its `parallel` feature, because a browser tab has no threads to spread the rows over.
+
+The one setting that gives that up is `Keep source size` under Framing, which dithers at the photo's own resolution: on a large upload that is seconds of work on the tab's only thread. The fractions beside it, down to an eighth, are the cheap way to ask for something bigger than the working size.
+
+The download button writes a real palette PNG through `dither-core`'s own encoder, which is the one thing the browser cannot do for itself: `canvas.toBlob` only ever writes truecolour RGBA.
+
+What the front end does not offer is `crop_from` as a pair of source-pixel coordinates. That needs a number rather than a menu, so it is left to the API below.
+
+### First-time setup
+
+```bash
+rustup target add wasm32-unknown-unknown
+brew install trunk
+```
 
 ## Running the backend
 
@@ -16,7 +43,7 @@ crates/
 cargo run -p dither-server
 ```
 
-It listens on `127.0.0.1:3000` and already allows the Vite dev server at `http://localhost:5173`, so a fresh SvelteKit project can call it with no further setup.
+It listens on `127.0.0.1:3000` and already allows the Vite dev server at `http://localhost:5173`, so a fresh SvelteKit project can call it with no further setup. The Rust front end above does not need it.
 
 Configuration comes from the environment, all of it optional:
 
@@ -145,7 +172,7 @@ Every failure is JSON, whatever caused it:
 
 `400` covers bad settings, an unreadable image and a missing body. `413` means the upload was over `MAX_UPLOAD_BYTES`. `500` means the pipeline itself failed.
 
-## Calling it from Svelte
+## Calling it from JavaScript
 
 `src/lib/dither.ts`:
 
@@ -274,9 +301,15 @@ cargo clippy --workspace --all-targets
 cargo fmt --all
 cargo run -p dither-server      # the backend
 cargo run -p dither-core -- photo.jpg   # the CLI
+
+cargo clippy -p dither-app --target wasm32-unknown-unknown   # the front end, on the target it ships to
 ```
 
 The API tests in `crates/dither-server/tests/api.rs` drive the router in-process, so they bind no socket and need no running server.
+
+A bare `cargo build` or `cargo test` skips `dither-app`: the workspace lists only the two native crates in `default-members`, because the front end is only ever built for `wasm32-unknown-unknown` and Trunk is what builds it. `--workspace` still reaches it, which is why the command above names the target explicitly.
+
+`dither-core` carries a `parallel` feature, on by default through `cli` and asked for by name in `dither-server`. It gates the `rayon` dependency and the row-level threading in `dither`, `resize` and the CLI's batch loop. `dither-app` leaves it off, and `crates/dither-core/src/parallel.rs` swaps in the sequential `chunks_mut` behind the same names so the hot loops read the same either way.
 
 ## Credits
 

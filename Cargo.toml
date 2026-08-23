@@ -1,6 +1,9 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
+# `dither-app` only ever builds for wasm32, so the bare `cargo build` and
+# `cargo test` at the root leave it to Trunk rather than failing on it.
+default-members = ["crates/dither-core", "crates/dither-server"]
 
 [workspace.package]
 version = "0.1.0"

@@ -9,13 +9,13 @@
 //!   5-bit RGB cube.
 
 use image::RgbImage;
-use rayon::prelude::*;
 
 use crate::bayer::{self, BayerSize};
 use crate::diffusion::{self, FLOYD_STEINBERG, Kernel};
 use crate::enhance;
 use crate::indexed::IndexedImage;
 use crate::palette::{Palette, to_lab};
+use crate::parallel::*;
 
 /// Which dithering algorithm to run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

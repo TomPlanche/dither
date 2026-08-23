@@ -15,7 +15,7 @@ path = "src/main.rs"
 
 [dependencies]
 # The pipeline itself. No CLI, but the byte-level image codecs.
-dither-core = { workspace = true, features = ["image-io"] }
+dither-core = { workspace = true, features = ["image-io", "parallel"] }
 
 axum = { workspace = true, features = ["multipart"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "signal"] }

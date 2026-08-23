@@ -5,7 +5,8 @@ use std::str::FromStr;
 
 use image::RgbImage;
 use image::imageops::{self, FilterType};
-use rayon::prelude::*;
+
+use crate::parallel::*;
 
 /// The landscape size the pipeline dithers at unless told otherwise.
 pub const DEFAULT_SIZE: (u32, u32) = (600, 400);

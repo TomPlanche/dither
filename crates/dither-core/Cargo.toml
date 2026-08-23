@@ -24,8 +24,10 @@ required-features = ["image-io"]
 default = ["cli"]
 # Image decoding and palette PNG encoding.
 image-io = ["dep:png", "image/jpeg", "image/png"]
+# Row-level threading in the hot stages. Off for wasm, which has no threads.
+parallel = ["dep:rayon"]
 # The command line front end.
-cli = ["image-io", "dep:clap"]
+cli = ["image-io", "parallel", "dep:clap"]
 
 [dependencies]
 # Buffers, resampling, Floyd-Steinberg error diffusion and colour indexing.
@@ -35,5 +37,5 @@ palette = { version = "0.7.7", default-features = false, features = ["std"] }
 # Palette PNG output, which `image` cannot write.
 png = { version = "0.18", optional = true }
 # Row-level parallelism in the hot stages, and the CLI's batch loop.
-rayon = "1.11"
+rayon = { version = "1.11", optional = true }
 clap = { version = "4", features = ["derive"], optional = true }

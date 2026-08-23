@@ -1,0 +1,18 @@
+[package]
+name = "dither-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Browser front end that runs the dithering pipeline in WebAssembly"
+publish = false
+
+[dependencies]
+console_error_panic_hook = "0.1.7"
+# The pipeline itself, compiled into the same wasm module. `parallel` stays off:
+# the browser gives this thread no others to spread the work over.
+dither-core = { workspace = true, features = ["image-io"] }
+js-sys = "0.3.104"
+leptos = { version = "0.8.20", features = ["csr"] }
+wasm-bindgen = "0.2.127"
+wasm-bindgen-futures = "0.4.77"
+web-sys = { version = "0.3.104", features = ["HtmlCanvasElement", "CanvasRenderingContext2d", "ImageData", "HtmlInputElement", "HtmlAnchorElement", "File", "FileList", "Blob", "BlobPropertyBag", "Url", "Event", "EventTarget", "DragEvent", "DataTransfer", "Window", "Document", "Element", "CssStyleDeclaration", "console", "Performance", "HtmlElement"] }

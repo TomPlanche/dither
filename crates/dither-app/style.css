@@ -1,0 +1,274 @@
+:root {
+  /* Lifted as-is from the portfolio's own main.scss, names and all, so a change
+     over there is a search-and-replace over here rather than a colour match. */
+  --text-color: #eceadf;
+  --rust-blue: #28607f;
+  --rust-dark-blue: #1e2650;
+  --rust-green: #61784d;
+  --rust-orange: #d34516;
+  --rust-silver: #67737a;
+  --zed-blue: #1348dc;
+  --zed-blue-text: oklch(80.9% 0.105 251.813);
+  --zed-dark: #121316;
+
+  /* What this app makes of them. The site puts --zed-blue-text on --zed-dark,
+     so the two carry over unchanged and everything else is drawn from the
+     --rust-* family. */
+  --ink: var(--zed-dark);
+  --raised: color-mix(in srgb, var(--zed-dark) 85%, var(--rust-dark-blue));
+  --line: var(--rust-dark-blue);
+  --text: var(--zed-blue-text);
+  --bright: var(--text-color);
+  --muted: var(--rust-silver);
+  --accent: var(--rust-orange);
+
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--ink);
+  color: var(--text);
+  font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+.app {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 22rem;
+  grid-template-areas: "masthead panel" "stage panel";
+  gap: 1.5rem;
+  align-content: start;
+  min-height: 100vh;
+  padding: 1.5rem;
+}
+
+.masthead {
+  grid-area: masthead;
+}
+
+.masthead h1 {
+  margin: 0;
+  color: var(--bright);
+  font-size: 1.6rem;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+}
+
+.masthead p {
+  margin: 0.35rem 0 0;
+  color: var(--muted);
+}
+
+/* Preview */
+
+.stage {
+  grid-area: stage;
+  display: grid;
+  place-items: center;
+  min-height: 60vh;
+  padding: 1.5rem;
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  background: var(--raised);
+}
+
+.preview {
+  display: block;
+  max-width: 100%;
+  max-height: 78vh;
+  /* The output is often smaller than the box it sits in, and a dither pattern
+     turns to mush the moment the browser interpolates it. */
+  image-rendering: pixelated;
+}
+
+.preview.waiting {
+  display: none;
+}
+
+.hint {
+  margin: 0;
+  color: var(--muted);
+}
+
+/* Controls */
+
+.panel {
+  grid-area: panel;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.row {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.file {
+  flex: 1;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--raised);
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.file input {
+  display: block;
+  width: 100%;
+  margin-top: 0.4rem;
+  font-size: 0.75rem;
+}
+
+.save {
+  padding: 0.55rem 0.9rem;
+  border: 0;
+  border-radius: 8px;
+  background: var(--accent);
+  color: var(--text-color);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.save:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+fieldset {
+  margin: 0;
+  padding: 0.9rem 1rem 1rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--raised);
+}
+
+legend {
+  padding: 0 0.4rem;
+  color: var(--muted);
+  font-size: 0.75rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.control {
+  display: block;
+  margin-top: 0.75rem;
+}
+
+.control:first-of-type {
+  margin-top: 0;
+}
+
+.control .name {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 0.3rem;
+  font-size: 0.85rem;
+}
+
+.control .name output {
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+
+.control input[type="range"] {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.control select,
+.control input[type="number"] {
+  width: 100%;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--ink);
+  color: inherit;
+  font: inherit;
+}
+
+.control.toggle {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.control.toggle .name {
+  margin: 0;
+}
+
+.control.toggle input {
+  accent-color: var(--accent);
+}
+
+.pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.6rem;
+}
+
+.pair .control {
+  margin-top: 0;
+}
+
+.swatches {
+  display: flex;
+  gap: 4px;
+  margin: 0.5rem 0 0;
+}
+
+.swatch {
+  flex: 1;
+  height: 1.35rem;
+  border-radius: 4px;
+}
+
+.readout {
+  margin: 0.75rem 0 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.error {
+  margin: 0;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid color-mix(in srgb, var(--rust-orange) 45%, var(--ink));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--rust-orange) 14%, var(--ink));
+  color: color-mix(in srgb, var(--rust-orange) 55%, var(--text-color));
+  font-size: 0.85rem;
+}
+
+@media (max-width: 900px) {
+  .app {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "masthead" "stage" "panel";
+  }
+}
+
+.note {
+  margin: 0.5rem 0 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+/* The site's saturated blues are too loud for a panel this dense, so they do
+   the one job that had no styling at all: saying where the keyboard is. */
+:focus-visible {
+  outline: 2px solid var(--zed-blue);
+  outline-offset: 2px;
+}
+
+.stage:has(:focus-visible),
+.file:focus-within {
+  border-color: var(--rust-blue);
+}

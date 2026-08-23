@@ -37,6 +37,7 @@ pub mod dither;
 pub mod enhance;
 pub mod indexed;
 pub mod palette;
+mod parallel;
 pub mod resize;
 
 #[cfg(feature = "image-io")]
