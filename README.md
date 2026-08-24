@@ -20,11 +20,15 @@ trunk serve --release
 
 It serves the app on `http://127.0.0.1:8080`. Drop a photo on it, or pick one, and the controls on the right reshape it live.
 
+With no photo of your own to hand, the Samples row offers the ones in the repository's `assets/`, labelled with the photographer who took them. Trunk copies that directory beside the bundle rather than into it, since nine megabytes of JPEG would dwarf the WebAssembly module and be downloaded whether or not anyone picked one: a sample is fetched when it is clicked and not before. The list itself is read from the directory by `build.rs`, so adding or removing a photo there is the whole of the change.
+
+A sample arrives with the scale already set to a quarter of each side. They are twenty-megapixel photographs, and dithering one whole is seconds of work for a result nobody asked to wait for; a quarter is a sixteenth of the pixels and turns the sliders back into something you can drag. Set it back to `Photo's own size` under Framing when you want the full thing.
+
 Nothing is uploaded. `dither-app` is Rust like everything else here, so it links `dither-core` into its own WebAssembly module and calls the pipeline directly, with no HTTP and no `wasm-bindgen` boundary in between. The photo is decoded, resized and dithered in the tab that opened it, and the backend is not involved at all. It is a static bundle: `trunk build --release` writes `dist/`, which any file server can host.
 
 The pipeline is split in two so the sliders have a chance of keeping up: a colour change re-dithers the working image rather than resampling the original photo again. `dither-core` is also built without its `parallel` feature here, because a browser tab has no threads to spread the rows over.
 
-How much that buys depends on the working size, and the working size now defaults to the photo's own. A 12-megapixel upload is dithered at 12 megapixels on the tab's only thread, which is seconds per change, not milliseconds. Nothing here picks a smaller size on your behalf any more, so a large photo wants one picked under Framing: `Scale to size` with a pair, or one of the fractions down to an eighth. The fastest thing to do while hunting for settings is to work small and switch back at the end.
+How much that buys depends on the working size, and the working size now defaults to the photo's own. A 12-megapixel upload is dithered at 12 megapixels on the tab's only thread, which is seconds per change, not milliseconds. Nothing here picks a smaller size on your behalf for a photo you brought, so a large one wants a size picked under Framing: `Scale to size` with a pair, or one of the fractions down to an eighth. The samples are the exception, since their size is known in advance. The fastest thing to do while hunting for settings is to work small and switch back at the end.
 
 The download button writes a real palette PNG through `dither-core`'s own encoder, which is the one thing the browser cannot do for itself: `canvas.toBlob` only ever writes truecolour RGBA.
 

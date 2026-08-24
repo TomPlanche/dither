@@ -9,7 +9,8 @@ use js_sys::{Array, Uint8Array};
 use wasm_bindgen::{Clamped, JsCast, JsValue};
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{
-    Blob, BlobPropertyBag, CanvasRenderingContext2d, File, HtmlAnchorElement, HtmlCanvasElement, ImageData, Url,
+    Blob, BlobPropertyBag, CanvasRenderingContext2d, File, HtmlAnchorElement, HtmlCanvasElement, ImageData, Response,
+    Url,
 };
 
 use crate::pipeline::Frame;
@@ -62,4 +63,20 @@ pub fn download(bytes: &[u8], name: &str) -> Result<(), JsValue> {
 /// Turns a decode failure into something worth putting on screen.
 pub fn describe(error: &io::IoError) -> String {
     format!("{error}")
+}
+
+/// Fetches a file served beside the page.
+///
+/// Same origin, so this is the bundle reading its own directory rather than
+/// anything leaving the machine.
+pub async fn fetch_bytes(url: &str) -> Result<Vec<u8>, JsValue> {
+    let window = web_sys::window().ok_or_else(|| JsValue::from_str("no window to fetch from"))?;
+
+    let response: Response = JsFuture::from(window.fetch_with_str(url)).await?.dyn_into()?;
+    if !response.ok() {
+        return Err(JsValue::from_str(&format!("{url} came back {}", response.status())));
+    }
+
+    let buffer = JsFuture::from(response.array_buffer()?).await?;
+    Ok(Uint8Array::new(&buffer).to_vec())
 }

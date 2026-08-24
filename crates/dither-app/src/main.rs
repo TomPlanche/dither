@@ -8,6 +8,7 @@
 mod app;
 mod browser;
 mod pipeline;
+mod samples;
 mod settings;
 
 fn main() {

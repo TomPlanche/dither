@@ -14,6 +14,7 @@ use web_sys::{DragEvent, File, HtmlInputElement};
 
 use crate::browser;
 use crate::pipeline::{self, Frame};
+use crate::samples;
 use crate::settings::{Anchor, Geometry, Look, MAX_DIMENSION, MAX_SCALE, Method, Resize, bayer_from_side};
 
 #[component]
@@ -25,6 +26,7 @@ pub fn App() -> impl IntoView {
     let scale = RwSignal::new(1_u32);
     let stem = RwSignal::new(String::from("image"));
     let error = RwSignal::new(None::<String>);
+    let fetching = RwSignal::new(false);
     let output_size = RwSignal::new(None::<(u32, u32)>);
 
     // The finished frame is only ever read by the download button, so it stays
@@ -58,22 +60,47 @@ pub fn App() -> impl IntoView {
         frame.set_value(Some(rendered));
     });
 
+    // Where a picked file and a picked sample meet: both are bytes and a name by this point.
+    let accept = move |bytes: Vec<u8>, name: &str| {
+        stem.set(file_stem(name));
+        match pipeline::decode(&bytes) {
+            Ok(photo) => {
+                error.set(None);
+                // The working size starts as the photo's own, so the fields say something true before they are
+                // touched and the default of keeping that size is a visible no-op rather than a blank.
+                geometry.update(|geom| geom.size = Some(photo.dimensions()));
+                source.set(Some(Arc::new(photo)));
+            },
+            Err(err) => error.set(Some(format!("that file did not decode: {}", browser::describe(&err)))),
+        }
+    };
+
     let load = move |file: File| {
-        stem.set(file_stem(&file.name()));
+        let name = file.name();
         spawn_local(async move {
             match browser::read_file(&file).await {
-                Ok(bytes) => match pipeline::decode(&bytes) {
-                    Ok(photo) => {
-                        error.set(None);
-                        // The working size starts as the photo's own, so the fields say something true before they
-                        // are touched and the default of keeping that size is a visible no-op rather than a blank.
-                        geometry.update(|geom| geom.size = Some(photo.dimensions()));
-                        source.set(Some(Arc::new(photo)));
-                    },
-                    Err(err) => error.set(Some(format!("that file did not decode: {}", browser::describe(&err)))),
-                },
+                Ok(bytes) => accept(bytes, &name),
                 Err(_) => error.set(Some("that file could not be read".to_string())),
             }
+        });
+    };
+
+    // A sample is a couple of megabytes over the network, so the row says so while one is on its way.
+    let load_sample = move |file: &'static str| {
+        fetching.set(true);
+        spawn_local(async move {
+            match browser::fetch_bytes(&samples::url(file)).await {
+                Ok(bytes) => {
+                    // These are 20-megapixel photos, and dithering one at its own size is seconds of work on the
+                    // tab's only thread. A quarter of each side is a sixteenth of that, which is fast enough to
+                    // start turning the sliders on. Set before the photo lands, so the first render is already the
+                    // small one rather than a slow one nobody asked for.
+                    geometry.update(|geom| geom.resize = Resize::Factor(0.25));
+                    accept(bytes, file);
+                },
+                Err(_) => error.set(Some(format!("{file} could not be loaded"))),
+            }
+            fetching.set(false);
         });
     };
 
@@ -147,6 +174,34 @@ pub fn App() -> impl IntoView {
 
                 <Show when=move || error.get().is_some()>
                     <p class="error">{move || error.get().unwrap_or_default()}</p>
+                </Show>
+
+                <Show when=move || !samples::SAMPLES.is_empty()>
+                    <fieldset>
+                        <legend>"Samples"</legend>
+                        <p class="note">
+                            "Photos from the repository, served beside this page and fetched only when you pick one. Named for who took them, and loaded at a quarter of each side, since they are far too large to dither whole at any speed."
+                        </p>
+                        <div class="samples">
+                            {samples::labelled()
+                                .into_iter()
+                                .map(|(file, label)| {
+                                    view! {
+                                        <button
+                                            class="sample"
+                                            disabled=move || fetching.get()
+                                            on:click=move |_| load_sample(file)
+                                        >
+                                            {label}
+                                        </button>
+                                    }
+                                })
+                                .collect_view()}
+                        </div>
+                        <Show when=move || fetching.get()>
+                            <p class="note">"Fetching..."</p>
+                        </Show>
+                    </fieldset>
                 </Show>
 
                 <fieldset>
