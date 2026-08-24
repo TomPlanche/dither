@@ -32,6 +32,8 @@ How much that buys depends on the working size, and the working size now default
 
 The download button writes a real palette PNG through `dither-core`'s own encoder, which is the one thing the browser cannot do for itself: `canvas.toBlob` only ever writes truecolour RGBA.
 
+The whole page is set in PP Supply Mono, copied from the portfolio's `static/fonts/` into `crates/dither-app/fonts/`. That is a licensed Pangram Pangram family rather than a free one, carried here because both projects belong to the same licensee. Three weights ship, since a page with headings and a button needs a real bold rather than a synthesised one; the `--mono` token in `style.css` is where the stack is written.
+
 What the front end does not offer is `crop_from` as a pair of source-pixel coordinates. That needs a number rather than a menu, so it is left to the API below.
 
 ### First-time setup

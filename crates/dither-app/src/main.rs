@@ -7,6 +7,7 @@
 
 mod app;
 mod browser;
+mod footer;
 mod pipeline;
 mod samples;
 mod settings;

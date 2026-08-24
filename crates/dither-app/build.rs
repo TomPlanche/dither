@@ -1,4 +1,4 @@
-//! Writes the sample list the app offers, read from `assets/` at build time.
+//! Writes the one thing the app needs to know at build time: the samples it offers.
 //!
 //! Hardcoding ten filenames would go stale the first time one is added or
 //! renamed, and there is no directory listing to ask for in a browser: the
@@ -35,6 +35,6 @@ fn main() {
         names.len()
     );
 
-    let out = Path::new(&env::var("OUT_DIR").expect("cargo sets the output directory")).join("samples.rs");
-    fs::write(&out, generated).expect("the sample list is written");
+    let out_dir = env::var("OUT_DIR").expect("cargo sets the output directory");
+    fs::write(Path::new(&out_dir).join("samples.rs"), generated).expect("the sample list is written");
 }

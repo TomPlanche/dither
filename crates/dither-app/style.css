@@ -1,6 +1,35 @@
+/* PP Supply Mono, from the portfolio's own `static/fonts/PPSupplyMono/`, and
+   the face the whole page is set in. A licensed Pangram Pangram family rather
+   than a free one, copied here because both projects belong to the same
+   licensee. Three weights, because a page with headings and a button needs a
+   real bold: synthesised bold on a monospace is worth 16KB to avoid. `swap` so
+   the text is readable while the files are still on their way. */
+
+@font-face {
+  font-family: "Supply Mono";
+  src: url("fonts/PPSupplyMono-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Supply Mono";
+  src: url("fonts/PPSupplyMono-Medium.woff2") format("woff2");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Supply Mono";
+  src: url("fonts/PPSupplyMono-Bold.woff2") format("woff2");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root {
-  /* Lifted as-is from the portfolio's own main.scss, names and all, so a change
-     over there is a search-and-replace over here rather than a colour match. */
   --text-color: #eceadf;
   --rust-blue: #28607f;
   --rust-dark-blue: #1e2650;
@@ -11,16 +40,15 @@
   --zed-blue-text: oklch(80.9% 0.105 251.813);
   --zed-dark: #121316;
 
-  /* What this app makes of them. The site puts --zed-blue-text on --zed-dark,
-     so the two carry over unchanged and everything else is drawn from the
-     --rust-* family. */
   --ink: var(--zed-dark);
   --raised: color-mix(in srgb, var(--zed-dark) 85%, var(--rust-dark-blue));
   --line: var(--rust-dark-blue);
   --text: var(--zed-blue-text);
   --bright: var(--text-color);
   --muted: var(--rust-silver);
-  --accent: var(--rust-orange);
+  --accent: var(--rust-silve);
+
+  --mono: "Supply Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
 
   color-scheme: dark;
 }
@@ -33,7 +61,15 @@ body {
   margin: 0;
   background: var(--ink);
   color: var(--text);
-  font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-family: var(--mono);
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+.shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
 }
 
 .app {
@@ -42,7 +78,7 @@ body {
   grid-template-areas: "masthead panel" "stage panel";
   gap: 1.5rem;
   align-content: start;
-  min-height: 100vh;
+  flex: 1;
   padding: 1.5rem;
 }
 
@@ -89,6 +125,15 @@ body {
   display: none;
 }
 
+/* An empty stage doubles as the file picker, so it has to read as clickable. */
+.stage.empty {
+  cursor: pointer;
+}
+
+.stage.empty:hover {
+  border-color: var(--rust-blue);
+}
+
 .hint {
   margin: 0;
   color: var(--muted);
@@ -122,6 +167,7 @@ body {
   display: block;
   width: 100%;
   margin-top: 0.4rem;
+  font-family: inherit;
   font-size: 0.75rem;
 }
 
@@ -301,4 +347,51 @@ legend {
 .sample:disabled {
   opacity: 0.4;
   cursor: progress;
+}
+
+/* Footer, following the one on tomplanche.com. */
+
+.footer {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: auto;
+  padding: 2rem 4vmin;
+  border-top: 1px dotted currentColor;
+  color: var(--muted);
+  font-size: 1rem;
+  letter-spacing: 0.08em;
+}
+
+/* Credit and links share one line, so it stays ordinary inline text rather than
+   a flex row: "made by" and the name after it are a sentence, and a flex gap
+   would prise them apart. The separators carry their own spacing instead. */
+.footer .made {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.footer .sep {
+  margin: 0 0.35rem;
+  opacity: 0.4;
+}
+
+/* One rule for the whole footer: every link rests at 0.7, the hovered one comes
+   up to full, and everything else drops back so it is the only one there.
+   Written against the anchors rather than the row they sit in, so a link added
+   to it joins in without another selector. */
+.footer a {
+  color: inherit;
+  text-decoration: none;
+  opacity: 0.7;
+  transition: opacity 0.15s ease;
+}
+
+.footer a:hover {
+  opacity: 1;
+}
+
+.footer:has(a:hover) a:not(:hover) {
+  opacity: 0.5;
 }

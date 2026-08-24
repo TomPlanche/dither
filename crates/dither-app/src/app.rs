@@ -10,9 +10,10 @@ use std::sync::Arc;
 use dither_core::{MAX_CROP_ZOOM, Palette, RgbImage};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
-use web_sys::{DragEvent, File, HtmlInputElement};
+use web_sys::{DragEvent, File, HtmlInputElement, KeyboardEvent};
 
 use crate::browser;
+use crate::footer::Footer;
 use crate::pipeline::{self, Frame};
 use crate::samples;
 use crate::settings::{Anchor, Geometry, Look, MAX_DIMENSION, MAX_SCALE, Method, Resize, bayer_from_side};
@@ -34,6 +35,18 @@ pub fn App() -> impl IntoView {
     // to re-run for a buffer none of them look at.
     let frame = StoredValue::new(None::<Frame>);
     let canvas = NodeRef::<leptos::html::Canvas>::new();
+    let picker = NodeRef::<leptos::html::Input>::new();
+
+    // The stage is a drop target and a button both: an empty one opens the file
+    // input that lives down in the panel, so the largest thing on the page is
+    // also the easiest way to fill it.
+    let choose = move || {
+        if source.get_untracked().is_none()
+            && let Some(input) = picker.get_untracked()
+        {
+            input.click();
+        }
+    };
 
     // Stage one. Runs on a new photo, or on any change to the framing.
     Effect::new(move |_| match source.get() {
@@ -126,6 +139,9 @@ pub fn App() -> impl IntoView {
     };
 
     view! {
+        // A column so the footer can sit at the bottom of a short page rather than
+        // halfway up it, which is what `margin-top: auto` needs to push against.
+        <div class="shell">
         <main class="app">
             <header class="masthead">
                 <h1>"dither"</h1>
@@ -134,6 +150,16 @@ pub fn App() -> impl IntoView {
 
             <section
                 class="stage"
+                class:empty=move || source.get().is_none()
+                role=move || source.get().is_none().then_some("button")
+                tabindex=move || source.get().is_none().then_some("0")
+                on:click=move |_| choose()
+                on:keydown=move |ev: KeyboardEvent| {
+                    if matches!(ev.key().as_str(), "Enter" | " ") {
+                        ev.prevent_default();
+                        choose();
+                    }
+                }
                 on:dragover=move |ev: DragEvent| ev.prevent_default()
                 on:drop=move |ev: DragEvent| {
                     ev.prevent_default();
@@ -148,7 +174,7 @@ pub fn App() -> impl IntoView {
             >
                 <canvas node_ref=canvas class="preview" class:waiting=move || source.get().is_none() />
                 <Show when=move || source.get().is_none()>
-                    <p class="hint">"Drop a photo here, or choose one below."</p>
+                    <p class="hint">"Drop a photo here, click to choose one, or pick a sample below."</p>
                 </Show>
             </section>
 
@@ -157,6 +183,7 @@ pub fn App() -> impl IntoView {
                     <label class="file">
                         "Choose a photo"
                         <input
+                            node_ref=picker
                             type="file"
                             accept="image/jpeg,image/png"
                             on:change=move |ev| {
@@ -414,6 +441,8 @@ pub fn App() -> impl IntoView {
                 </fieldset>
             </aside>
         </main>
+        <Footer />
+        </div>
     }
 }
 
