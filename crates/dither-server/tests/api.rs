@@ -90,7 +90,11 @@ async fn options_defaults_round_trip_into_a_query_string() {
 
     let json: serde_json::Value = serde_json::from_slice(&body_bytes(response).await).expect("options is JSON");
     assert_eq!(json["defaults"]["method"], "floyd-steinberg");
-    assert_eq!(json["defaults"]["width"], 600);
+    // No size and nothing said about scaling, so neither is reported: the default request is one that hands the photo
+    // back at its own resolution, and sending these back unchanged has to stay a request that does the same.
+    assert!(json["defaults"]["width"].is_null());
+    assert!(json["defaults"]["height"].is_null());
+    assert!(json["defaults"]["resize"].is_null());
 
     // Six slots, blended at the default saturation, ready for CSS.
     let palette = json["palette"].as_array().expect("palette is an array");
@@ -117,12 +121,13 @@ async fn options_defaults_round_trip_into_a_query_string() {
 }
 
 #[tokio::test]
-async fn a_raw_body_comes_back_as_a_png_at_the_working_size() {
+async fn a_raw_body_comes_back_as_a_png_at_the_photos_own_size() {
     let response = call(post("/api/dither", "image/png", source_png())).await;
 
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(response.headers()["content-type"], "image/png");
-    assert_eq!(response.headers()["x-image-size"], "600x400");
+    // Nothing named a size, so nothing was scaled.
+    assert_eq!(response.headers()["x-image-size"], "120x90");
 
     let bytes = body_bytes(response).await;
     assert_eq!(&bytes[1..4], b"PNG", "the response is a PNG");
@@ -146,13 +151,17 @@ async fn a_multipart_image_field_is_accepted() {
     .await;
 
     assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(response.headers()["x-image-size"], "600x400");
+    assert_eq!(response.headers()["x-image-size"], "120x90");
 }
 
 #[tokio::test]
 async fn keep_orientation_transposes_the_working_size_for_a_portrait_upload() {
+    // A named pair, since transposing a working size takes one: with nothing named the target is the photo, which is
+    // already in its own orientation and has nothing to turn over.
+    let sized = "width=600&height=400";
+
     let response = call(post(
-        "/api/dither?keep_orientation=true",
+        &format!("/api/dither?keep_orientation=true&{sized}"),
         "image/png",
         sized_png(90, 120),
     ))
@@ -162,20 +171,32 @@ async fn keep_orientation_transposes_the_working_size_for_a_portrait_upload() {
     assert_eq!(response.headers()["x-image-size"], "400x600");
 
     // A landscape upload is unaffected.
-    let response = call(post("/api/dither?keep_orientation=true", "image/png", source_png())).await;
+    let uri = format!("/api/dither?keep_orientation=true&{sized}");
+    let response = call(post(&uri, "image/png", source_png())).await;
     assert_eq!(response.headers()["x-image-size"], "600x400");
 
     // And without the flag a portrait upload is still squashed into the landscape size.
-    let response = call(post("/api/dither", "image/png", sized_png(90, 120))).await;
+    let response = call(post(&format!("/api/dither?{sized}"), "image/png", sized_png(90, 120))).await;
     assert_eq!(response.headers()["x-image-size"], "600x400");
 }
 
 #[tokio::test]
 async fn a_preset_reshapes_the_working_size_rather_than_replacing_it() {
-    // 9:16 fitted inside the default 600x400, which the ratio turns over first.
-    let response = call(post("/api/dither?preset=instagram-story", "image/png", source_png())).await;
+    // With no pair, 9:16 is cut out of the 120x90 photo itself: the largest 9:16 rectangle actually in there, at the
+    // resolution it already had, and never the larger one it would have to be blown up to.
+    let uri = "/api/dither?preset=instagram-story&crop=true";
+    let response = call(post(uri, "image/png", source_png())).await;
 
     assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["x-image-size"], "50x90");
+
+    // With neither a pair to fit inside nor a crop to be cut out with, the shape would do nothing, so it is a 400.
+    let response = call(post("/api/dither?preset=instagram-story", "image/png", source_png())).await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    // Given a pair, that is the box instead, and the ratio turns it over first.
+    let uri = "/api/dither?preset=instagram-story&width=600&height=400";
+    let response = call(post(uri, "image/png", source_png())).await;
     assert_eq!(response.headers()["x-image-size"], "337x600");
 
     // The pair still says how much gets dithered, so a bigger one buys more pixels of the same shape.
@@ -189,7 +210,7 @@ async fn a_preset_reshapes_the_working_size_rather_than_replacing_it() {
     assert_eq!(response.headers()["x-image-size"], "180x320");
 
     // It follows the photo when the orientation is kept: the portrait preset turned over for a landscape upload.
-    let uri = "/api/dither?preset=instagram-story&keep_orientation=true";
+    let uri = "/api/dither?preset=instagram-story&keep_orientation=true&width=600&height=400";
     let response = call(post(uri, "image/png", source_png())).await;
     assert_eq!(response.headers()["x-image-size"], "600x337");
 }
@@ -216,11 +237,12 @@ async fn options_lists_every_preset_with_its_ratio() {
     );
     assert_eq!(presets[0]["ratio"], serde_json::json!([1, 1]));
 
-    // Every listed name end to end. A preset is fitted inside `width` and `height`, so none of them can cost more than
-    // the default 600x400 does, and all seven are affordable here.
+    // Every listed name end to end, cut out of the photo itself. Fitted inside a photo rather than inside a named
+    // pair, a preset can only ever take pixels away, so none of them comes back larger than the upload.
     for preset in presets {
         let name = preset["name"].as_str().expect("a preset name");
-        let response = call(post(&format!("/api/dither?preset={name}"), "image/png", source_png())).await;
+        let uri = format!("/api/dither?preset={name}&crop=true");
+        let response = call(post(&uri, "image/png", source_png())).await;
         assert_eq!(response.status(), StatusCode::OK, "{name} should be accepted");
 
         let ratio = preset["ratio"].as_array().expect("a preset ratio");
@@ -229,15 +251,14 @@ async fn options_lists_every_preset_with_its_ratio() {
             ratio[1].as_u64().expect("a height"),
         );
 
-        // What came back is the ratio the listing advertised, to within the rounding, and inside the 600x400 that was
-        // asked for or inside its transpose when the ratio turned it over.
+        // What came back is the ratio the listing advertised, to within the rounding, and inside the 120x90 photo it
+        // was cut out of. The photo is never turned over, so there is no transposed case to allow for here.
         let size = response.headers()["x-image-size"].to_str().expect("a size header");
         let (width, height) = size.split_once('x').expect("WIDTHxHEIGHT");
         let (width, height): (u64, u64) = (width.parse().expect("a width"), height.parse().expect("a height"));
-        let room = if rh > rw { (400, 600) } else { (600, 400) };
         assert!(
-            width <= room.0 && height <= room.1,
-            "{name} came back {size}, outside the 600x400 it was fitted inside"
+            width <= 120 && height <= 90,
+            "{name} came back {size}, larger than the 120x90 it was cut out of"
         );
         let drift = (width * rh).abs_diff(height * rw);
         assert!(drift <= rw.max(rh), "{name} came back {size}, off {rw}:{rh}");
@@ -366,9 +387,16 @@ async fn resize_takes_a_fraction_of_the_photos_own_size() {
     assert_eq!(response.headers()["x-crop-rect"], "40,0,40,40");
     assert_eq!(response.headers()["x-image-size"], "20x20");
 
-    // `true` still fits the working size, and `false` still keeps the source resolution.
-    let response = call(post("/api/dither?method=none&resize=true", "image/png", banded_png())).await;
+    // `true` still fits the working size, which it now has to be given.
+    let uri = "/api/dither?method=none&resize=true&width=600&height=400";
+    let response = call(post(uri, "image/png", banded_png())).await;
     assert_eq!(response.headers()["x-image-size"], "600x400");
+
+    // Without a pair there is nothing for it to fit to, and that is a 400 rather than a guess.
+    let response = call(post("/api/dither?resize=true", "image/png", banded_png())).await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    // `false` still keeps the source resolution.
     let response = call(post("/api/dither?method=none&resize=false", "image/png", banded_png())).await;
     assert_eq!(response.headers()["x-image-size"], "120x40");
 
@@ -497,7 +525,7 @@ async fn crop_from_without_crop_is_refused_rather_than_ignored() {
 #[tokio::test]
 async fn a_portrait_upload_keeps_its_orientation() {
     let response = call(post(
-        "/api/dither?keep_orientation=true",
+        "/api/dither?keep_orientation=true&width=600&height=400",
         "image/png",
         sized_png(90, 120),
     ))
@@ -512,7 +540,7 @@ async fn scale_multiplies_the_output() {
     let response = call(post("/api/dither?scale=2", "image/png", source_png())).await;
 
     assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(response.headers()["x-image-size"], "1200x800");
+    assert_eq!(response.headers()["x-image-size"], "240x180");
 }
 
 #[tokio::test]

@@ -65,6 +65,9 @@ pub fn App() -> impl IntoView {
                 Ok(bytes) => match pipeline::decode(&bytes) {
                     Ok(photo) => {
                         error.set(None);
+                        // The working size starts as the photo's own, so the fields say something true before they
+                        // are touched and the default of keeping that size is a visible no-op rather than a blank.
+                        geometry.update(|geom| geom.size = Some(photo.dimensions()));
                         source.set(Some(Arc::new(photo)));
                     },
                     Err(err) => error.set(Some(format!("that file did not decode: {}", browser::describe(&err)))),
@@ -73,6 +76,12 @@ pub fn App() -> impl IntoView {
             }
         });
     };
+
+    // What the number fields show: the working size once one is picked, and the photo's own until then.
+    let sides = Signal::derive(move || {
+        let photo = source.get().map_or((0, 0), |photo| photo.dimensions());
+        geometry.get().sides(photo)
+    });
 
     let save = move |_| {
         frame.with_value(|held| {
@@ -234,13 +243,19 @@ pub fn App() -> impl IntoView {
                     <div class="pair">
                         <Number
                             label="Width"
-                            value=Signal::derive(move || geometry.get().width)
-                            on_change=Callback::new(move |next| geometry.update(|geom| geom.width = next))
+                            value=Signal::derive(move || sides.get().0)
+                            on_change=Callback::new(move |next| {
+                                let (_, height) = sides.get_untracked();
+                                geometry.update(|geom| geom.size = Some((next, height)));
+                            })
                         />
                         <Number
                             label="Height"
-                            value=Signal::derive(move || geometry.get().height)
-                            on_change=Callback::new(move |next| geometry.update(|geom| geom.height = next))
+                            value=Signal::derive(move || sides.get().1)
+                            on_change=Callback::new(move |next| {
+                                let (width, _) = sides.get_untracked();
+                                geometry.update(|geom| geom.size = Some((width, next)));
+                            })
                         />
                     </div>
 
@@ -262,7 +277,13 @@ pub fn App() -> impl IntoView {
 
                     <Show when=move || !geometry.get().resize.names_a_size()>
                         <p class="note">
-                            "Width and height are read as a shape here rather than a size. The scaling comes from the fraction, and the crop still decides what is kept."
+                            {move || {
+                                if geometry.get().crop {
+                                    "Width and height are read as a shape here rather than a size: the crop cuts that shape out at the photo's own resolution."
+                                } else {
+                                    "Width and height only shape the crop, and there is no crop, so nothing is using them. Turn on the crop below, or scale to the size instead."
+                                }
+                            }}
                         </p>
                     </Show>
 

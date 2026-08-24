@@ -64,16 +64,18 @@ pub fn decode(bytes: &[u8]) -> Result<RgbImage, io::IoError> {
 /// size: for the other two it is a shape the crop is measured against, and the
 /// scaling either comes from the fraction or does not happen at all.
 pub fn fit(source: &RgbImage, geometry: Geometry) -> RgbImage {
-    let target = geometry.target();
+    let target = geometry.target(source.dimensions());
     let fit = geometry.fit();
 
     match geometry.resize {
         Resize::Fit => resize::resize_to_fit(source, target, fit),
         Resize::Factor(factor) => resize::scale_to_fit(source, target, fit, factor),
-        // Keeping the source pixels is no reason to stop framing them.
+        // Keeping the source pixels is no reason to stop framing them, and a crop
+        // is the one way to change a photo's shape without scaling it.
         Resize::Keep if fit.crop => resize::crop_to_fit(source, target, fit),
-        // The one path that dithers at the source resolution, which on a large
-        // photo is the slowest thing this app can be asked to do.
+        // The default, and the one path that dithers at the photo's own
+        // resolution, which on a large upload is the slowest thing this app can
+        // be asked to do.
         Resize::Keep => source.clone(),
     }
 }

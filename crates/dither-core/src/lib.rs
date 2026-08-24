@@ -8,8 +8,9 @@
 //!
 //! # Pipeline
 //!
-//! 1. Resize to the working size ([`resize`]), 600x400 by default. [`FitOptions`] can keep a portrait photo in the
-//!    transposed size instead, and crop rather than stretch whatever ratio is left over.
+//! 1. Resize to the working size ([`resize`]), which is the photo's own size until a caller names another one.
+//!    [`FitOptions`] can keep a portrait photo in the transposed size instead, and crop rather than stretch whatever
+//!    ratio is left over. [`working_size`] is what turns "a size, a preset, or neither" into the pair to dither at.
 //! 2. Boost brightness, then colour ([`enhance`]).
 //! 3. Dither to the 6-colour palette ([`dither`]), which yields an [`IndexedImage`].
 //!
@@ -25,7 +26,9 @@
 //! use dither_core::{DitherOptions, apply_dithering, io, resize};
 //!
 //! let photo = io::load_rgb("photo.jpg")?;
-//! let sized = resize::resize_image(&photo, resize::DEFAULT_SIZE);
+//! // No size named, so the photo keeps its own. `Some((600, 400))` would resize it.
+//! let target = resize::working_size(photo.dimensions(), None, None);
+//! let sized = resize::resize_image(&photo, target);
 //! let dithered = apply_dithering(&sized, &DitherOptions::default());
 //! io::save_indexed_png(&dithered, "photo_dithered.png")?;
 //! # Ok::<(), Box<dyn std::error::Error>>(())
@@ -49,9 +52,9 @@ pub use dither::{DitherMethod, DitherOptions, OrderedLut, apply_dithering};
 pub use indexed::IndexedImage;
 pub use palette::Palette;
 pub use resize::{
-    CropOrigin, DEFAULT_SIZE, FitOptions, MAX_CROP_ZOOM, RATIO_PRESETS, cover_rect, fitted_rect, fitted_size,
-    orient_target, preset_names, preset_ratio, ratio_size, resize_cropped, resize_image, resize_to_fit, scale_nearest,
-    scale_to_fit,
+    CropOrigin, FitOptions, MAX_CROP_ZOOM, RATIO_PRESETS, cover_rect, fitted_rect, fitted_size, orient_target,
+    preset_names, preset_ratio, ratio_inside, ratio_size, resize_cropped, resize_image, resize_to_fit, scale_nearest,
+    scale_to_fit, working_size,
 };
 
 /// Re-exported so callers can build inputs without depending on `image` directly.

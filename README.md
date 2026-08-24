@@ -22,9 +22,9 @@ It serves the app on `http://127.0.0.1:8080`. Drop a photo on it, or pick one, a
 
 Nothing is uploaded. `dither-app` is Rust like everything else here, so it links `dither-core` into its own WebAssembly module and calls the pipeline directly, with no HTTP and no `wasm-bindgen` boundary in between. The photo is decoded, resized and dithered in the tab that opened it, and the backend is not involved at all. It is a static bundle: `trunk build --release` writes `dist/`, which any file server can host.
 
-Two things make the sliders keep up. The pipeline is split in two, so a colour change re-dithers the working image, 600x400 by default, rather than resampling the original 12-megapixel photo again. And `dither-core` is built without its `parallel` feature, because a browser tab has no threads to spread the rows over.
+The pipeline is split in two so the sliders have a chance of keeping up: a colour change re-dithers the working image rather than resampling the original photo again. `dither-core` is also built without its `parallel` feature here, because a browser tab has no threads to spread the rows over.
 
-The one setting that gives that up is `Keep source size` under Framing, which dithers at the photo's own resolution: on a large upload that is seconds of work on the tab's only thread. The fractions beside it, down to an eighth, are the cheap way to ask for something bigger than the working size.
+How much that buys depends on the working size, and the working size now defaults to the photo's own. A 12-megapixel upload is dithered at 12 megapixels on the tab's only thread, which is seconds per change, not milliseconds. Nothing here picks a smaller size on your behalf any more, so a large photo wants one picked under Framing: `Scale to size` with a pair, or one of the fractions down to an eighth. The fastest thing to do while hunting for settings is to work small and switch back at the end.
 
 The download button writes a real palette PNG through `dither-core`'s own encoder, which is the one thing the browser cannot do for itself: `canvas.toBlob` only ever writes truecolour RGBA.
 
@@ -73,14 +73,15 @@ Defaults, accepted values, limits and the palette. The `defaults` object uses ex
   "formats": ["indexed", "rgb"],
   "bayer_sizes": [2, 4, 8],
   "presets": [{ "name": "instagram-post", "ratio": [1, 1] }, { "name": "instagram-story", "ratio": [9, 16] }, "..."],
-  "defaults": { "method": "floyd-steinberg", "saturation": 0.6, "brightness": 1.1, "color": 1.4, "bayer_size": 4, "threshold_scale": 1.0, "width": 600, "height": 400, "resize": true, "keep_orientation": false, "crop": false, "scale": 1, "format": "indexed" },
+  "defaults": { "method": "floyd-steinberg", "saturation": 0.6, "brightness": 1.1, "color": 1.4, "bayer_size": 4, "threshold_scale": 1.0, "keep_orientation": false, "crop": false, "scale": 1, "format": "indexed" },
   "limits": { "max_upload_bytes": 26214400, "max_dimension": 4096, "max_scale": 4, "max_source_pixels": 50000000, "max_crop_zoom": 10.0 },
-  "default_size": [600, 400],
   "palette": ["#221c22", "#ffffff", "#e2d82a", "#c32b2d", "#004cff", "#189c22"]
 }
 ```
 
 The palette is the blend at the default saturation, ready to drop into CSS.
+
+`width`, `height` and `resize` are absent from `defaults` because the default asks for no resizing at all, the same way `crop_from` is absent until a crop needs one. Posting the defaults back unchanged therefore stays a valid request, and one that hands the photo back at its own size.
 
 ### `POST /api/dither`
 
@@ -105,11 +106,11 @@ Settings ride in the query string on both POST routes. Every one is optional.
 | `color` | `1.4` | `0.0` to `5.0`. Applied before dithering, after brightness. |
 | `bayer_size` | `4` | `2`, `4` or `8`. Ordered dithering only. |
 | `threshold_scale` | `1.0` | `0.0` to `5.0`. Ordered dithering only. |
-| `width` | `600` | `1` to `4096` |
-| `height` | `400` | `1` to `4096` |
-| `preset` | none | A named aspect ratio, fitted inside `width`x`height`. See the table below. |
-| `resize` | `true` | `true` scales to the working size, `false` keeps the source resolution, and a fraction between 0 and 1 takes that much of each side. It governs the scaling only: `crop` still frames the photo, to `width`x`height`'s shape or the preset's. |
-| `keep_orientation` | `false` | `true` transposes `width`x`height` for a photo that disagrees with it, so a portrait upload stays portrait. |
+| `width` | none | `1` to `4096`. Goes with `height`; naming the pair is itself the request to scale to it. |
+| `height` | none | `1` to `4096`. Goes with `width`. |
+| `preset` | none | A named aspect ratio, fitted inside `width`x`height`, or inside the photo itself when there is no pair. See the table below. |
+| `resize` | unstated | `true` scales to the working size, `false` keeps the source resolution, and a fraction between 0 and 1 takes that much of each side. Left out, a request with a `width` and `height` scales to them and one without keeps the photo's own size. |
+| `keep_orientation` | `false` | `true` transposes `width`x`height` for a photo that disagrees with it, so a portrait upload stays portrait. Nothing to do without a pair or a preset, since a photo already has its own orientation. |
 | `crop` | `false` | `true` crops to `width`x`height`'s aspect ratio instead of stretching the photo into it. |
 | `crop_from` | `center` | Which part the crop keeps: `center`, `top`, `bottom`, `left`, `right`, or a corner as `X,Y`. Needs `crop=true`. |
 | `crop_zoom` | `1.0` | `1.0` to `10.0`. Above 1.0 the crop keeps a proportionally smaller rectangle. Needs `crop=true`. Not needed with a corner. |
@@ -120,15 +121,22 @@ An unknown parameter is an error rather than a silent no-op, so a typo shows up 
 
 `keep_orientation` and `crop` are what an upload of any shape needs to come out undistorted: the first follows the photo's own orientation, the second trims the long side rather than stretching the short one. Neither changes the size that comes back, so a client can keep reading it off `x-image-size`.
 
-`resize` answers one question, how much smaller the photo should come back, three ways:
+### Size
+
+Nothing is resized unless something asks for it. A photo posted with no settings comes back the size it went in, dithered and nothing else, which is why there is no default `width` or `height` to report: the pipeline has no size of its own to prefer.
+
+`resize` answers the one question of how much smaller the photo should come back, three ways:
 
 | `resize` | what it does |
 | --- | --- |
-| `true` | Scales to the working size: `width`x`height`, reshaped by any `preset`. |
-| `false` | Keeps the source resolution. |
+| unstated | Scales to `width`x`height` when the pair is there, and keeps the photo's own size when it is not. |
+| `true` | Scales to the working size: `width`x`height`, reshaped by any `preset`. Refused without the pair, since there would be no size to fit to. |
+| `false` | Keeps the source resolution. The pair, if there is one, is then a shape for `crop` rather than a size. |
 | `0.75` | Takes three quarters of each side of whatever the framing kept, so a quarter off the photo. |
 
-It governs the scaling alone, so `crop` keeps framing under all three: the first says how much smaller, the second says what shape. A 1536x2048 photo with `preset=instagram-story&crop=true` comes back 1152x2048 under `resize=false` and 864x1536 under `resize=0.75`, against 337x600 under `resize=true`. `x-crop-rect` reports the region that was read whichever it is.
+It governs the scaling alone, so `crop` keeps framing under all of them: the first says how much smaller, the second says what shape. A 1536x2048 photo with `preset=instagram-story&crop=true` comes back 1152x2048 with nothing said about `resize`, 864x1536 under `resize=0.75`, and 337x600 under `width=600&height=400`. `x-crop-rect` reports the region that was read whichever it is.
+
+Since a shape can only be honoured by cropping to it or by scaling to a size, `preset` with neither a pair nor `crop=true` is a `400` rather than a setting that is read and then does nothing.
 
 `method=none` skips the dither and returns the photo resized and cropped, and nothing else. It is for checking the framing, where the dither pattern is in the way. `resize`, `preset`, `crop`, `crop_from`, `crop_zoom`, `scale` and the `x-crop-rect` header all work the same; the palette settings have nothing to act on, and `format` has no palette to index, so the result is always a plain RGB PNG.
 
@@ -148,7 +156,7 @@ Both POST routes answer with `x-crop-rect: X,Y,WIDTH,HEIGHT`, the part of the up
 
 `preset` names an aspect ratio instead of working the shape out by hand. It does not replace `width` and `height`: the largest rectangle of that ratio that fits inside the pair is what gets dithered, so the preset picks the shape and the pair still picks the scale. `GET /api/options` carries the same table under `presets`, so a picker can be built from the API rather than hardcoded.
 
-| `preset` value | Ratio | Inside the default 600x400 | What it is |
+| `preset` value | Ratio | Inside 600x400 | What it is |
 | --- | --- | --- | --- |
 | `instagram-post` | 1:1 | 400x400 | Square post |
 | `instagram-portrait` | 4:5 | 400x500 | The tallest post the feed takes |
@@ -156,9 +164,11 @@ Both POST routes answer with `x-crop-rect: X,Y,WIDTH,HEIGHT`, the part of the up
 | `instagram-story` | 9:16 | 337x600 | Stories and reels |
 | `iphone` | 4:3 | 533x400 | The iPhone's default photo shape |
 
-The pair is turned over first when the ratio disagrees with it, so a portrait ratio is not squeezed into the landscape default's short side: `preset=instagram-story` against 600x400 is 337x600, not 225x400.
+The pair is turned over first when the ratio disagrees with it, so a portrait ratio is not squeezed into a landscape pair's short side: `preset=instagram-story` against `width=600&height=400` is 337x600, not 225x400.
 
-Since a preset is fitted inside `width` and `height` rather than carrying its own pixel count, asking for more resolution is a matter of asking for a bigger pair: `preset=instagram-story` alone returns 337x600, and `preset=instagram-story&width=1080&height=1080` returns 607x1080 of the same shape. What a request costs therefore follows the pair, not the name. `x-image-size` reports what it landed on.
+With no pair, the photo itself is the box, and that one is never turned over: it is already in its own orientation, and turning it over would ask for pixels the upload never had. `preset=instagram-story&crop=true` on a 4000x3000 photo is 1687x3000, the largest 9:16 rectangle actually in there, cut out at full resolution.
+
+Since a preset is fitted inside something rather than carrying its own pixel count, asking for more resolution is a matter of asking for a bigger box: `preset=instagram-story&width=1080&height=1080` returns 607x1080 of the same shape. What a request costs therefore follows the box, not the name. `x-image-size` reports what it landed on.
 
 A preset names one orientation, and `keep_orientation=true` transposes it for a photo of the other one, so `preset=iphone&keep_orientation=true&crop=true` returns 400x533 undistorted. An unknown name is a 400 listing the ones that work.
 

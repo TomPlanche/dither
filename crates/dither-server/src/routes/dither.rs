@@ -11,7 +11,7 @@ use axum::body::Bytes;
 use axum::extract::{FromRequest, Multipart, Request, State};
 use axum::http::header::CONTENT_TYPE;
 use axum::response::{IntoResponse, Response};
-use dither_core::{DEFAULT_SIZE, IndexedImage, MAX_CROP_ZOOM, Palette, RgbImage, apply_dithering, io, resize};
+use dither_core::{IndexedImage, MAX_CROP_ZOOM, Palette, RgbImage, apply_dithering, io, resize};
 use serde::Serialize;
 
 use crate::config::Config;
@@ -78,7 +78,6 @@ pub async fn options(State(config): State<Arc<Config>>) -> Json<OptionsBody> {
             max_source_pixels: MAX_SOURCE_PIXELS,
             max_crop_zoom: MAX_CROP_ZOOM,
         },
-        default_size: DEFAULT_SIZE,
         palette: palette.colors().iter().map(hex).collect(),
     })
 }
@@ -91,8 +90,6 @@ pub struct OptionsBody {
     presets: Vec<PresetRatio>,
     defaults: DitherParams,
     limits: Limits,
-    /// The working size a request lands on when it names neither `width` nor `height`.
-    default_size: (u32, u32),
     /// The palette at the default saturation, as `#rrggbb`, in slot order.
     palette: Vec<String>,
 }
@@ -180,14 +177,15 @@ fn prepare(source: &[u8], params: DitherParams) -> Result<(RgbImage, String), Ap
 
     let fit = params.fit();
 
-    // The shape the framing is measured against, which is the working size itself when scaling to it.
-    let target = params.working_size().unwrap_or_else(|| params.working_ratio());
+    // The size to dither at, which is the photo's own until something names another.
+    let target = params.working_size((width, height));
     let (x, y, kept_w, kept_h) = resize::fitted_rect((width, height), target, fit);
 
-    let working = match params.resize {
+    let working = match params.scaling() {
         Resize::Fit => resize::resize_to_fit(&photo, target, fit),
         Resize::Factor(factor) => resize::scale_to_fit(&photo, target, fit, factor),
-        // Keeping the source pixels is no reason to stop framing them.
+        // Keeping the source pixels is no reason to stop framing them, and a crop is the one way to change a photo's
+        // shape without scaling it: the target is cut out of the source at the resolution it already had.
         Resize::Keep if fit.crop => resize::crop_to_fit(&photo, target, fit),
         Resize::Keep => photo,
     };

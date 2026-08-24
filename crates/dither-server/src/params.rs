@@ -208,20 +208,31 @@ pub struct DitherParams {
     pub bayer_size: u32,
     /// Scales the Bayer threshold amplitude. Ordered dithering only.
     pub threshold_scale: f64,
-    /// Working width, used unless `resize` is false. A `preset` reshapes it rather than replacing it.
-    pub width: u32,
-    /// Working height, used unless `resize` is false. A `preset` reshapes it rather than replacing it.
-    pub height: u32,
-    /// A named aspect ratio, fitted inside `width`x`height`.
+    /// Working width. Both sides go together, and left out the photo keeps its own.
+    ///
+    /// Naming the pair is itself the request to scale to it, so `resize` is only needed to say something else.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width: Option<u32>,
+    /// Working height. Both sides go together, and left out the photo keeps its own.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<u32>,
+    /// A named aspect ratio, fitted inside `width`x`height`, or inside the photo itself when there is no pair.
     ///
     /// It picks the shape and the pair still picks the scale, so a request says how many pixels it wants dithered
-    /// whichever preset it names.
+    /// whichever preset it names. Against the photo it never enlarges: `instagram-story` on a 4000x3000 upload is
+    /// 1687x3000, the largest 9:16 rectangle actually in there.
     ///
     /// Left out of `GET /api/options` when unset, where the `presets` list says what the names are instead.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub preset: Option<Preset>,
-    /// What to scale the photo to: `true` for the working size, `false` for none, or a fraction of its own size.
-    pub resize: Resize,
+    /// What to scale the photo to: `true` for the working size, `false` for none, or a fraction of what the framing
+    /// kept.
+    ///
+    /// Left out, a request that named `width` and `height` scales to them and one that did not keeps the photo's own
+    /// resolution, so neither common case has to say anything. `true` without the pair is refused, since there would
+    /// be no size to fit to. Left out of `GET /api/options` when unset, like `crop_from`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resize: Option<Resize>,
     /// Keep the photo's orientation: a portrait photo resizes to `height`x`width`.
     pub keep_orientation: bool,
     /// Crop to the working size's aspect ratio instead of stretching the photo into it.
@@ -254,10 +265,10 @@ impl Default for DitherParams {
             color: defaults.color_factor,
             bayer_size: defaults.bayer_size.side() as u32,
             threshold_scale: defaults.threshold_scale,
-            width: dither_core::DEFAULT_SIZE.0,
-            height: dither_core::DEFAULT_SIZE.1,
+            width: None,
+            height: None,
             preset: None,
-            resize: Resize::Fit,
+            resize: None,
             keep_orientation: false,
             crop: false,
             crop_from: None,
@@ -286,8 +297,28 @@ impl DitherParams {
             )));
         }
 
-        dimension("width", self.width)?;
-        dimension("height", self.height)?;
+        // Half a pair is a mistake worth naming: it reads as a size but cannot be one.
+        if self.width.is_some() != self.height.is_some() {
+            return Err(ApiError::bad_request(
+                "width and height go together: name both to set a working size, or neither to keep the photo's own",
+            ));
+        }
+        if let Some((width, height)) = self.size() {
+            dimension("width", width)?;
+            dimension("height", height)?;
+        } else if self.resize == Some(Resize::Fit) {
+            return Err(ApiError::bad_request(
+                "resize=true needs width and height, which are the size it would fit to",
+            ));
+        }
+
+        // A shape with nothing to reshape is the same kind of mistake: with no pair to fit inside and no crop to cut
+        // it out with, a preset would be read, accepted and then do nothing at all.
+        if self.preset.is_some() && self.size().is_none() && !self.crop {
+            return Err(ApiError::bad_request(
+                "preset needs either width and height to be fitted inside, or crop=true to be cut out of the photo",
+            ));
+        }
 
         // A setting that cannot take effect is a mistake worth naming, the way an unknown parameter is.
         let unusable = [
@@ -302,7 +333,7 @@ impl DitherParams {
             )));
         }
 
-        if let Some(factor) = self.resize.factor()
+        if let Some(factor) = self.scaling().factor()
             && (!factor.is_finite() || !(0.0..=1.0).contains(&factor) || factor == 0.0)
         {
             return Err(ApiError::bad_request(format!(
@@ -335,27 +366,35 @@ impl DitherParams {
         }))
     }
 
-    /// The size to dither at, or `None` when the source resolution is kept.
+    /// The working size, when the request named one. Both sides or neither, which `to_options` has already checked.
+    pub fn size(self) -> Option<(u32, u32)> {
+        self.width.zip(self.height)
+    }
+
+    /// The scaling asked for, with the unstated case filled in.
+    ///
+    /// A pair of dimensions and no word about them is a request to scale to the pair; no pair and no word keeps the
+    /// photo's own resolution. Saying `resize` explicitly overrides both, which is how `resize=false` still means
+    /// "use the pair as a shape and leave the pixels alone".
+    pub fn scaling(self) -> Resize {
+        self.resize.unwrap_or(match self.size() {
+            Some(_) => Resize::Fit,
+            None => Resize::Keep,
+        })
+    }
+
+    /// The size to dither at.
     ///
     /// A preset reshapes `width`x`height` rather than replacing it: the largest rectangle of the preset's ratio that
     /// fits inside the pair, which is turned over first when the ratio disagrees with it. So `preset=instagram-story`
-    /// against the default 600x400 is 337x600 rather than 225x400, and either way the result is never larger than the
-    /// dimensions the request already had checked.
-    pub fn working_size(self) -> Option<(u32, u32)> {
-        matches!(self.resize, Resize::Fit)
-            .then(|| dither_core::ratio_size((self.width, self.height), self.working_ratio()))
-    }
-
-    /// The shape the geometry is measured against, whatever `resize` says.
+    /// against `width=600&height=400` is 337x600 rather than 225x400, and either way the result is never larger than
+    /// the dimensions the request already had checked.
     ///
-    /// `resize=false` keeps the source resolution, but a crop still needs a shape to aim at, and this is it: the
-    /// preset's ratio, or `width`x`height` when no preset was named. So `resize=false` means no scaling rather than no
-    /// framing, and `crop` keeps working underneath it.
-    pub fn working_ratio(self) -> (u32, u32) {
-        match self.preset {
-            Some(preset) => preset.ratio(),
-            None => (self.width, self.height),
-        }
+    /// With no pair the photo's own dimensions stand in and are not turned over, since a photo is already in its own
+    /// orientation. The rule itself lives in [`dither_core::working_size`], which the CLI and the browser front end
+    /// call too, so the three cannot drift apart.
+    pub fn working_size(self, source: (u32, u32)) -> (u32, u32) {
+        dither_core::working_size(source, self.size(), self.preset.map(Preset::ratio))
     }
 
     /// How a photo that does not share the working size's shape is fitted to it.
@@ -482,7 +521,8 @@ mod tests {
                 ..Default::default()
             },
             DitherParams {
-                width: 0,
+                width: Some(0),
+                height: Some(400),
                 ..Default::default()
             },
             DitherParams {
@@ -509,11 +549,11 @@ mod tests {
             // preset can never carry a request past the dimension limit.
             let params = DitherParams {
                 preset: Some(preset),
-                width: MAX_DIMENSION,
-                height: MAX_DIMENSION,
+                width: Some(MAX_DIMENSION),
+                height: Some(MAX_DIMENSION),
                 ..Default::default()
             };
-            let (width, height) = params.working_size().expect("resize is on");
+            let (width, height) = params.working_size((MAX_DIMENSION, MAX_DIMENSION));
             assert!(
                 (1..=MAX_DIMENSION).contains(&width) && (1..=MAX_DIMENSION).contains(&height),
                 "{} is {width}x{height}, outside what the API accepts",
@@ -536,43 +576,130 @@ mod tests {
 
     #[test]
     fn a_preset_reshapes_width_and_height_rather_than_replacing_them() {
+        // A photo big enough that nothing here is bounded by it.
+        const PHOTO: (u32, u32) = (4000, 3000);
+
         let params = DitherParams {
             preset: Some(Preset::InstagramPortrait),
-            width: 320,
-            height: 240,
+            width: Some(320),
+            height: Some(240),
             ..Default::default()
         };
         // 4:5 turns the pair over and then fits inside it, so the scale is still the one that was asked for.
-        assert_eq!(params.working_size(), Some((240, 300)));
+        assert_eq!(params.working_size(PHOTO), (240, 300));
 
         // Without one, the pair is used as it was sent.
-        assert_eq!(DitherParams { preset: None, ..params }.working_size(), Some((320, 240)));
-
-        // A portrait ratio turns the default pair over rather than being squeezed into its short side.
-        let against_default = |preset| {
-            DitherParams {
-                preset: Some(preset),
-                ..Default::default()
-            }
-            .working_size()
-        };
-        assert_eq!(against_default(Preset::InstagramStory), Some((337, 600)));
-        assert_eq!(against_default(Preset::Iphone), Some((533, 400)));
+        assert_eq!(DitherParams { preset: None, ..params }.working_size(PHOTO), (320, 240));
 
         // And a bigger pair buys more pixels of the same shape.
         let bigger = DitherParams {
             preset: Some(Preset::InstagramStory),
-            width: 1080,
-            height: 1080,
+            width: Some(1080),
+            height: Some(1080),
             ..Default::default()
         };
-        assert_eq!(bigger.working_size(), Some((607, 1080)));
+        assert_eq!(bigger.working_size(PHOTO), (607, 1080));
+    }
+
+    #[test]
+    fn without_a_pair_the_photo_is_what_a_preset_is_fitted_inside() {
+        const PHOTO: (u32, u32) = (4000, 3000);
+
+        // Nothing named at all, so the photo comes back the size it arrived.
+        assert_eq!(DitherParams::default().working_size(PHOTO), PHOTO);
+
+        let against_photo = |preset| {
+            DitherParams {
+                preset: Some(preset),
+                ..Default::default()
+            }
+            .working_size(PHOTO)
+        };
+
+        // The largest 9:16 rectangle actually in a 4000x3000 photo. The pair would have been turned over here; the
+        // photo is not, since it is already in its own orientation and there are no pixels above 3000 to reach for.
+        assert_eq!(against_photo(Preset::InstagramStory), (1687, 3000));
+        // 4:3 is the photo's own shape, so the preset costs it nothing.
+        assert_eq!(against_photo(Preset::Iphone), PHOTO);
+
+        // A portrait photo is fitted inside on its own terms too.
+        assert_eq!(against_photo(Preset::InstagramPost), (3000, 3000));
+    }
+
+    #[test]
+    fn a_named_pair_is_itself_the_request_to_scale_to_it() {
+        // Nothing said about scaling and no pair to scale to: the photo keeps its resolution.
+        assert_eq!(DitherParams::default().scaling(), Resize::Keep);
+
+        // A pair and nothing said about it means scale to the pair.
+        let sized = DitherParams {
+            width: Some(800),
+            height: Some(600),
+            ..Default::default()
+        };
+        assert_eq!(sized.scaling(), Resize::Fit);
+
+        // Saying it explicitly still wins, which is what keeps "this shape, at the photo's own resolution" sayable.
+        assert_eq!(
+            DitherParams {
+                resize: Some(Resize::Keep),
+                ..sized
+            }
+            .scaling(),
+            Resize::Keep
+        );
+        assert_eq!(
+            DitherParams {
+                resize: Some(Resize::Factor(0.125)),
+                ..sized
+            }
+            .scaling(),
+            Resize::Factor(0.125)
+        );
+    }
+
+    #[test]
+    fn half_a_pair_and_a_fit_with_no_pair_are_both_refused() {
+        // One side alone reads as a size but cannot be one.
+        for half in [
+            DitherParams {
+                width: Some(800),
+                ..Default::default()
+            },
+            DitherParams {
+                height: Some(600),
+                ..Default::default()
+            },
+        ] {
+            assert!(half.to_options().is_err(), "half a pair should be refused");
+        }
+
+        // And there is nothing for `resize=true` to fit to.
+        let fit_with_nothing = DitherParams {
+            resize: Some(Resize::Fit),
+            ..Default::default()
+        };
+        assert!(fit_with_nothing.to_options().is_err());
+
+        // With the pair it is simply what a bare pair already meant.
+        assert!(
+            DitherParams {
+                resize: Some(Resize::Fit),
+                width: Some(800),
+                height: Some(600),
+                ..Default::default()
+            }
+            .to_options()
+            .is_ok()
+        );
     }
 
     #[test]
     fn the_fitting_flags_reach_the_pipeline() {
+        const PHOTO: (u32, u32) = (4000, 3000);
+
         let params = DitherParams::default();
-        assert_eq!(params.working_size(), Some((600, 400)));
+        assert_eq!(params.working_size(PHOTO), PHOTO);
         assert_eq!(params.fit(), FitOptions::default());
 
         let params = DitherParams {
@@ -601,11 +728,18 @@ mod tests {
         assert_eq!(params.fit().crop_from, CropOrigin::Center);
         assert_eq!(params.fit().crop_zoom, 1.0);
 
-        // Anything but `resize=true` drops the working size, and the framing then works off the shape alone.
+        // The shape a request named survives whatever it said about scaling, so the framing keeps working underneath.
+        let shaped = DitherParams {
+            width: Some(600),
+            height: Some(400),
+            ..params
+        };
         for resize in [Resize::Keep, Resize::Factor(0.75)] {
-            let params = DitherParams { resize, ..params };
-            assert_eq!(params.working_size(), None);
-            assert_eq!(params.working_ratio(), (600, 400));
+            let params = DitherParams {
+                resize: Some(resize),
+                ..shaped
+            };
+            assert_eq!(params.working_size(PHOTO), (600, 400));
         }
     }
 
@@ -620,7 +754,14 @@ mod tests {
         ] {
             let params: DitherParams =
                 serde_json::from_value(serde_json::json!({ "resize": raw })).expect("the query string form parses");
-            assert_eq!(params.resize, expected, "`{raw}`");
+            assert_eq!(params.resize, Some(expected), "`{raw}`");
+
+            // With a pair to fit to, so `true` has the size it needs and the others are unaffected by it.
+            let params = DitherParams {
+                width: Some(600),
+                height: Some(400),
+                ..params
+            };
             assert!(params.to_options().is_ok(), "`{raw}` should be accepted");
         }
 
@@ -629,15 +770,17 @@ mod tests {
             serde_json::from_value::<DitherParams>(serde_json::json!({ "resize": true }))
                 .expect("a bool parses")
                 .resize,
-            Resize::Fit
+            Some(Resize::Fit)
         );
+        // The default says nothing about scaling, so it reports nothing: posting the defaults back unchanged has to
+        // stay a request that keeps the photo's own size.
         assert_eq!(
             serde_json::to_value(DitherParams::default()).expect("defaults serialise")["resize"],
-            serde_json::json!(true)
+            serde_json::Value::Null
         );
         assert_eq!(
             serde_json::to_value(DitherParams {
-                resize: Resize::Factor(0.75),
+                resize: Some(Resize::Factor(0.75)),
                 ..Default::default()
             })
             .expect("a factor serialises")["resize"],
@@ -647,7 +790,7 @@ mod tests {
         // A fraction outside what it can mean is refused, and so is a spelling that is neither.
         for bad in [0.0, -0.5, 1.5, f64::NAN] {
             let params = DitherParams {
-                resize: Resize::Factor(bad),
+                resize: Some(Resize::Factor(bad)),
                 ..Default::default()
             };
             assert!(params.to_options().is_err(), "resize {bad} should be refused");

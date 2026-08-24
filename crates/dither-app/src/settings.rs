@@ -6,8 +6,8 @@
 //! lets the app re-run the cheap one on its own while a colour slider moves.
 
 use dither_core::{
-    ATKINSON, BURKES, BayerSize, CropOrigin, DEFAULT_SIZE, DitherMethod, DitherOptions, FLOYD_STEINBERG, FitOptions,
-    JARVIS_JUDICE_NINKE, STUCKI,
+    ATKINSON, BURKES, BayerSize, CropOrigin, DitherMethod, DitherOptions, FLOYD_STEINBERG, FitOptions,
+    JARVIS_JUDICE_NINKE, STUCKI, working_size,
 };
 
 /// The largest scale factor the UI offers, matching the server's own ceiling.
@@ -157,10 +157,10 @@ pub enum Resize {
 }
 
 impl Resize {
-    /// The two named modes, then a halving ladder down to an eighth.
+    /// The two named modes, then a halving ladder down to an eighth. `Keep` leads, since it is the default.
     pub const ALL: [Resize; 5] = [
-        Resize::Fit,
         Resize::Keep,
+        Resize::Fit,
         Resize::Factor(0.5),
         Resize::Factor(0.25),
         Resize::Factor(0.125),
@@ -179,8 +179,8 @@ impl Resize {
     /// so no two of these ever compare equal by accident.
     pub fn label(self) -> &'static str {
         match self.slug().as_str() {
-            "true" => "Fit to size",
-            "false" => "Keep source size",
+            "true" => "Scale to size",
+            "false" => "Photo's own size",
             "0.5" => "Half (0.5)",
             "0.25" => "Quarter (0.25)",
             "0.125" => "Eighth (0.125)",
@@ -210,8 +210,8 @@ impl Resize {
 /// belongs to the cheap stage instead.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Geometry {
-    pub width: u32,
-    pub height: u32,
+    /// The working size, once a photo has been loaded to seed it. `None` only before that.
+    pub size: Option<(u32, u32)>,
     pub resize: Resize,
     pub keep_orientation: bool,
     pub crop: bool,
@@ -222,9 +222,8 @@ pub struct Geometry {
 impl Default for Geometry {
     fn default() -> Self {
         Self {
-            width: DEFAULT_SIZE.0,
-            height: DEFAULT_SIZE.1,
-            resize: Resize::Fit,
+            size: None,
+            resize: Resize::Keep,
             keep_orientation: false,
             crop: false,
             crop_from: Anchor(CropOrigin::Center),
@@ -237,8 +236,18 @@ impl Geometry {
     /// The working size when `resize` scales to it, and otherwise the shape the
     /// crop is measured against. The pipeline reads it as one or the other
     /// depending on which resize function it is handed to.
-    pub fn target(self) -> (u32, u32) {
-        (self.width, self.height)
+    ///
+    /// The rule itself is [`working_size`], which the CLI and the HTTP backend
+    /// call too, so what this app does with a size cannot drift from what they
+    /// do with the same one.
+    pub fn target(self, source: (u32, u32)) -> (u32, u32) {
+        working_size(source, self.size, None)
+    }
+
+    /// The pair the number fields show: the working size, or the photo's own
+    /// until one has been picked.
+    pub fn sides(self, source: (u32, u32)) -> (u32, u32) {
+        self.size.unwrap_or(source)
     }
 
     pub fn fit(self) -> FitOptions {

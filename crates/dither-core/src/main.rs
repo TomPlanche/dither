@@ -98,11 +98,13 @@ struct Cli {
     #[arg(long, default_value_t = 1.0, value_name = "F")]
     threshold_scale: f64,
 
-    /// Working size, as WIDTHxHEIGHT. With --preset it is the box the ratio is fitted inside.
-    #[arg(long, default_value = "600x400", value_name = "WxH", value_parser = parse_size)]
-    size: (u32, u32),
+    /// Working size, as WIDTHxHEIGHT. Left out, the photo keeps its own size. With --preset it is the box the ratio
+    /// is fitted inside.
+    #[arg(long, value_name = "WxH", value_parser = parse_size)]
+    size: Option<(u32, u32)>,
 
-    /// Aspect ratio by name, for the shapes a platform expects. Reshapes --size rather than replacing it.
+    /// Aspect ratio by name, for the shapes a platform expects. Reshapes --size, or the photo itself when there is no
+    /// --size, rather than replacing either.
     #[arg(
         long,
         value_name = "NAME",
@@ -111,15 +113,17 @@ struct Cli {
     )]
     preset: Option<(u32, u32)>,
 
-    /// Dither at the source resolution instead of resizing first.
+    /// Read --size as a shape only, and dither at the photo's own resolution. Without --size there is nothing to
+    /// scale to anyway, so this only says anything alongside one.
     #[arg(long)]
     no_resize: bool,
 
-    /// Scale by a fraction of the source instead of to the working size: 0.75 takes a quarter off.
+    /// Scale by a fraction of what the framing kept: 0.75 takes a quarter off, 0.125 an eighth of each side.
     #[arg(long, conflicts_with = "no_resize", value_name = "F", value_parser = parse_factor)]
     resize: Option<f64>,
 
-    /// Keep the photo's orientation: a portrait photo resizes to the transpose of the working size.
+    /// Keep the photo's orientation: a portrait photo resizes to the transpose of the working size. Only bites when
+    /// something named a size or a shape, since a photo already has its own.
     #[arg(long)]
     keep_orientation: bool,
 
@@ -205,20 +209,13 @@ impl Cli {
     ///
     /// A preset only ever picks the shape, so `--size` still says how much gets dithered. It is fitted inside the pair
     /// rather than replacing it, and the pair is turned over first when the ratio disagrees with it, so
-    /// `--preset instagram-story` against the default 600x400 is 337x600 rather than 225x400.
-    fn working_size(&self) -> (u32, u32) {
-        match self.preset {
-            Some(ratio) => resize::ratio_size(self.size, ratio),
-            None => self.size,
-        }
-    }
-
-    /// The shape the geometry is measured against, whatever `--no-resize` says.
+    /// `--preset instagram-story --size 600x400` is 337x600 rather than 225x400.
     ///
-    /// `--no-resize` keeps the source resolution, but a crop still needs a shape to aim at, and this is it. So it means
-    /// no scaling rather than no framing, and `--crop` keeps working underneath it.
-    fn working_ratio(&self) -> (u32, u32) {
-        self.preset.unwrap_or_else(|| self.working_size())
+    /// With no `--size` the photo's own dimensions stand in, so the run keeps whatever resolution arrived and a preset
+    /// only reshapes it. [`resize::working_size`] is what decides between the two, and the server and the browser
+    /// front end call the same function, so none of the three can drift.
+    fn working_size(&self, source: (u32, u32)) -> (u32, u32) {
+        resize::working_size(source, self.size, self.preset)
     }
 
     fn fit(&self) -> FitOptions {
@@ -289,21 +286,18 @@ fn process(cli: &Cli, input: &Path) -> Result<String, Box<dyn Error>> {
     let photo = io::load_rgb(input)?;
     let source_size = photo.dimensions();
 
-    // What the crop kept, so `--verbose` can say why a coordinate did not move anything.
-    // The shape the framing is measured against, which is the working size itself when scaling to it.
-    let target = if cli.no_resize || cli.resize.is_some() {
-        cli.working_ratio()
-    } else {
-        cli.working_size()
-    };
+    // The size to dither at, and what the crop kept, so `--verbose` can say why a coordinate did not move anything.
+    let target = cli.working_size(source_size);
     let kept = cli.crop.then(|| resize::fitted_rect(source_size, target, cli.fit()));
 
-    let working: RgbImage = match cli.resize {
-        Some(factor) => resize::scale_to_fit(&photo, target, cli.fit(), factor),
-        // Keeping the source pixels is no reason to stop framing them.
-        None if cli.no_resize && cli.crop => resize::crop_to_fit(&photo, target, cli.fit()),
-        None if cli.no_resize => photo,
-        None => resize::resize_to_fit(&photo, target, cli.fit()),
+    // Naming a --size is itself the request to scale to it; without one, or under --no-resize, nothing is scaled and
+    // a crop is what cuts the shape out at the resolution the photo already had. The server resolves the same three
+    // cases from `resize=true|false|<fraction>`.
+    let working: RgbImage = match (cli.resize, cli.no_resize) {
+        (Some(factor), _) => resize::scale_to_fit(&photo, target, cli.fit(), factor),
+        (None, false) if cli.size.is_some() => resize::resize_to_fit(&photo, target, cli.fit()),
+        (None, _) if cli.crop => resize::crop_to_fit(&photo, target, cli.fit()),
+        (None, _) => photo,
     };
 
     let rendered = match cli.dither_options() {
@@ -349,6 +343,13 @@ fn process(cli: &Cli, input: &Path) -> Result<String, Box<dyn Error>> {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+
+    // A shape with nothing to reshape would be read, accepted and then do nothing at all, which is worth saying out
+    // loud rather than leaving to be noticed in the output. The server refuses the same combination.
+    if cli.preset.is_some() && cli.size.is_none() && !cli.crop {
+        eprintln!("error: --preset needs either --size to be fitted inside, or --crop to be cut out of the photo");
+        return ExitCode::FAILURE;
+    }
 
     // Decoding dominates the pipeline and is single-threaded per photo, so a batch is fastest with one photo per core.
     // `map` over an indexed parallel iterator keeps the results in input order, so the output does not depend on which

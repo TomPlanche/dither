@@ -17,7 +17,8 @@ use dither_core::dither::OrderedLut;
 use dither_core::{DitherMethod, DitherOptions, Palette, RgbImage, apply_dithering, enhance, io, resize};
 
 /// The size the pipeline dithers at.
-const WORKING: (u32, u32) = resize::DEFAULT_SIZE;
+/// The size these numbers were always measured at, kept so the history in BENCHMARKS.md stays comparable.
+const WORKING: (u32, u32) = (600, 400);
 
 /// One decoded sample photo, kept at full resolution.
 struct Asset {

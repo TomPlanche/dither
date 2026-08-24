@@ -15,7 +15,7 @@ cargo build --release -p dither-core
 ./target/release/dither-core photo.jpg
 ```
 
-That writes `photo_dithered.png` next to the input, resized to the 600x400 working size and dithered with the default settings.
+That writes `photo_dithered.png` next to the input, dithered with the default settings and at the size it came in. Nothing is resized until `--size`, `--preset` or `--resize` asks for it.
 
 Several images at once, into a directory:
 
@@ -35,17 +35,24 @@ Ordered dithering with a 2x2 Bayer matrix and softened thresholds:
 dither-core photo.jpg -m ordered --bayer-size 2 --threshold-scale 0.5
 ```
 
-A portrait photo, kept portrait rather than squashed into the landscape working size:
+Resized, which takes asking:
 
 ```bash
-dither-core photo.jpg --keep-orientation
+dither-core photo.jpg --size 600x400
+# a 3456x5184 photo is squashed into 600x400
+```
+
+A portrait photo, kept portrait rather than squashed into a landscape working size:
+
+```bash
+dither-core photo.jpg --size 600x400 --keep-orientation
 # a 3456x5184 photo comes out 400x600, the working size transposed
 ```
 
 Undistorted whatever the photo's shape, which is the two flags together:
 
 ```bash
-dither-core photo.jpg --keep-orientation --crop
+dither-core photo.jpg --size 600x400 --keep-orientation --crop
 # a 3:4 photo comes out 400x600 with the sides trimmed, not stretched to 2:3
 ```
 
@@ -71,15 +78,17 @@ dither-core photo.jpg --preset instagram-story --crop --crop-from 0,200 -v
 #   crop: 1039x1848 from 0,200
 ```
 
-A shape a platform expects, at whatever size `--size` asks for:
+A shape a platform expects. With no `--size` it is cut out of the photo at full resolution, and `--size` is what asks for a particular number of pixels instead:
 
 ```bash
 dither-core photo.jpg --preset instagram-story --crop
-# 337x600, cropped to 9:16 rather than squeezed into it
+# a 4000x3000 photo comes out 1687x3000: the largest 9:16 rectangle actually in it
 
 dither-core photo.jpg --preset instagram-story --crop --size 1080x1080
 # 607x1080, the same 9:16 with the pixels to post it at
 ```
+
+A shape has to have something to change, so `--preset` on its own, with neither `--size` to be fitted inside nor `--crop` to be cut out with, is an error rather than a flag that quietly does nothing.
 
 ### Options
 
@@ -92,11 +101,11 @@ dither-core photo.jpg --preset instagram-story --crop --size 1080x1080
 | `--color <F>` | `1.4` | Colour intensity multiplier applied before dithering |
 | `--bayer-size <N>` | `4` | Bayer matrix size: 2, 4 or 8. Ordered only |
 | `--threshold-scale <F>` | `1.0` | Scales the Bayer threshold amplitude. Ordered only |
-| `--size <WxH>` | `600x400` | Working size. With `--preset` it is the box the ratio is fitted inside |
-| `--preset <NAME>` | none | Aspect ratio by name, from the table below. Reshapes `--size` rather than replacing it |
-| `--no-resize` | off | Dither at the source resolution. Scaling only: `--crop` still frames the photo |
-| `--resize <F>` | off | Scale by a fraction of the source rather than to `--size`: `0.75` takes a quarter off |
-| `--keep-orientation` | off | Resize a portrait photo to the transpose of the working size, so it stays portrait |
+| `--size <WxH>` | the photo's own | Working size, and naming it is what asks for the resize. With `--preset` it is the box the ratio is fitted inside |
+| `--preset <NAME>` | none | Aspect ratio by name, from the table below. Reshapes `--size`, or the photo itself when there is no `--size` |
+| `--no-resize` | off | Read `--size` as a shape only and dither at the photo's own resolution. Says nothing without a `--size` |
+| `--resize <F>` | off | Scale by a fraction of what the framing kept: `0.75` takes a quarter off, `0.125` an eighth of each side |
+| `--keep-orientation` | off | Resize a portrait photo to the transpose of the working size, so it stays portrait. Needs a `--size` or a `--preset` to have a size to transpose |
 | `--crop` | off | Crop to the working size's aspect ratio instead of stretching the photo into it |
 | `--crop-from <WHERE>` | `center` | Which part the crop keeps: `center`, `top`, `bottom`, `left`, `right`, or a corner as `X,Y`. Needs `--crop` |
 | `--crop-zoom <F>` | `1.0` | `1.0` to `10.0`. Above 1.0 the crop keeps a proportionally smaller rectangle. Needs `--crop`. Not needed with a corner |
@@ -108,7 +117,7 @@ dither-core photo.jpg --preset instagram-story --crop --size 1080x1080
 
 `--preset` names an aspect ratio, so the shapes do not have to be worked out by hand. It does not replace `--size`: the largest rectangle of that ratio that fits inside it is what gets dithered, so the preset picks the shape and `--size` still picks the scale.
 
-| `--preset` value | Ratio | Inside the default 600x400 | What it is |
+| `--preset` value | Ratio | Inside `--size 600x400` | What it is |
 | --- | --- | --- | --- |
 | `instagram-post` | 1:1 | 400x400 | Square post |
 | `instagram-portrait` | 4:5 | 400x500 | The tallest post the feed takes |
@@ -116,11 +125,13 @@ dither-core photo.jpg --preset instagram-story --crop --size 1080x1080
 | `instagram-story` | 9:16 | 337x600 | Stories and reels |
 | `iphone` | 4:3 | 533x400 | The iPhone's default photo shape |
 
-`--size` is turned over first when the ratio disagrees with it, so a portrait ratio is not squeezed into the landscape default's short side: `--preset instagram-story` against 600x400 is 337x600, not 225x400.
+`--size` is turned over first when the ratio disagrees with it, so a portrait ratio is not squeezed into a landscape pair's short side: `--preset instagram-story --size 600x400` is 337x600, not 225x400.
 
-A preset names one orientation, and `--keep-orientation` transposes whichever one is asked for: `--preset iphone --keep-orientation` dithers a portrait photo at 400x533. Add `--crop` and nothing is stretched.
+With no `--size` the photo itself is the box, and that one is never turned over: it is already in its own orientation, and turning it over would ask for pixels the file never had. `--preset instagram-story --crop` on a 4000x3000 photo is 1687x3000, cut out at full resolution.
 
-What a run costs follows `--size` rather than the name, since that is what decides how many pixels get dithered: any preset against the default 600x400 is the same tens of milliseconds, and `--size 4032x3024` is where the seconds go.
+A preset names one orientation, and `--keep-orientation` transposes whichever one is asked for: `--preset iphone --keep-orientation --size 600x400` dithers a portrait photo at 400x533. Add `--crop` and nothing is stretched.
+
+What a run costs follows the box rather than the name, since that is what decides how many pixels get dithered: any preset against `--size 600x400` is the same tens of milliseconds, and a preset cut out of a 4032x3024 photo is where the seconds go.
 
 ### Methods
 
@@ -147,7 +158,9 @@ dither-core = { path = "crates/dither-core" }
 use dither_core::{ATKINSON, DitherMethod, DitherOptions, apply_dithering, io, resize};
 
 let photo = io::load_rgb("photo.jpg")?;
-let sized = resize::resize_image(&photo, resize::DEFAULT_SIZE);
+// No size and no preset, so the photo keeps its own. `Some((600, 400))` would resize it.
+let target = resize::working_size(photo.dimensions(), None, None);
+let sized = resize::resize_image(&photo, target);
 
 let options = DitherOptions {
     method: DitherMethod::ErrorDiffusion(ATKINSON),
@@ -160,13 +173,15 @@ io::save_indexed_png(&dithered, "photo_dithered.png")?;
 
 `apply_dithering` hands back an `IndexedImage`: one palette slot per pixel plus the palette itself. `io::save_indexed_png` writes it as a palette PNG, `to_rgb` expands it back to full colour, and `scale_nearest` upscales it without leaving the palette.
 
-`resize::resize_image` always produces the size you name, stretching the photo into it. `resize::resize_to_fit` takes a `FitOptions` instead: `keep_orientation` transposes the size for a photo of the other orientation, so a portrait photo comes out 400x600 and a landscape one 600x400, and `crop` takes the largest centred rectangle that already has the target's ratio rather than stretching what is left over.
+`resize::working_size` is what turns "a size, a preset, or neither" into the pair to dither at, and it is the one place that rule lives: the CLI, the HTTP backend and the browser front end all call it, so none of the three can drift from the others. A `None` size means the photo's own dimensions, which is why nothing here resizes unless it is asked to.
+
+`resize::resize_image` always produces the size you name, stretching the photo into it. `resize::resize_to_fit` takes a `FitOptions` instead: `keep_orientation` transposes the size for a photo of the other orientation, so against 600x400 a portrait photo comes out 400x600 and a landscape one 600x400, and `crop` takes the largest centred rectangle that already has the target's ratio rather than stretching what is left over.
 
 ```rust
 use dither_core::FitOptions;
 
 let fit = FitOptions { keep_orientation: true, crop: true, ..Default::default() };
-let sized = resize::resize_to_fit(&photo, resize::DEFAULT_SIZE, fit);
+let sized = resize::resize_to_fit(&photo, (600, 400), fit);
 ```
 
 Which part the crop keeps is `FitOptions::crop_from`, a `CropOrigin`, and its two forms work from opposite ends. An anchor (`Center` by default, `Top`, `Bottom`, `Left`, `Right`) takes the largest rectangle the target's ratio allows and puts it against a side; since such a rectangle spans the photo's full width or full height, an anchor only moves it along the axis that has slack, and `Top` on a photo losing its sides behaves like `Center`. `At { x, y }` is the other way round: the corner is where the crop starts, so it is kept as given and the rectangle is the largest that fits below and to the right of it. That is what makes `At { x: 0, y: 200 }` drop the top 200 rows of any photo, at the cost of size, and a corner past the last pixel keeps that pixel.
@@ -177,9 +192,12 @@ Which part the crop keeps is `FitOptions::crop_from`, a `CropOrigin`, and its tw
 
 The named ratios are `resize::RATIO_PRESETS`, a table of `(name, (width, height))` where the pair is a shape rather than a pixel count, with `resize::preset_ratio` for the lookup and `resize::preset_names` for building a picker. `resize::ratio_size` turns one into a size: the largest rectangle of that ratio that fits inside the working size handed to it, which it turns over first when the ratio disagrees with it. So a preset only ever reframes a size a caller already picked, and a caller is free to ignore the table and pass its own.
 
+`resize::ratio_inside` is the same fit without the turn-over, for a box that is a real photo rather than a working size: a photo is already in its own orientation, so reorienting it would ask for pixels the file never had. That is the one difference between the two halves of `working_size`.
+
 ```rust
 let ratio = resize::preset_ratio("instagram-story").expect("a name from the table");
-let size = resize::ratio_size(resize::DEFAULT_SIZE, ratio); // 337x600
+let size = resize::ratio_size((600, 400), ratio); // 337x600, the pair turned over first
+let cut = resize::ratio_inside((4000, 3000), ratio); // 1687x3000, what is actually in the photo
 ```
 
 Inputs are `image::RgbImage`, so anything that crate can decode works, and `RgbImage::from_raw` takes pixels you already have.
