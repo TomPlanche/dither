@@ -20,7 +20,7 @@ trunk serve --release
 
 It serves the app on `http://127.0.0.1:8080`. Drop a photo on it, or pick one, and the controls on the right reshape it live.
 
-With no photo of your own to hand, the Samples row offers the ones in the repository's `assets/`, labelled with the photographer who took them. Trunk copies that directory beside the bundle rather than into it, since nine megabytes of JPEG would dwarf the WebAssembly module and be downloaded whether or not anyone picked one: a sample is fetched when it is clicked and not before. The list itself is read from the directory by `build.rs`, so adding or removing a photo there is the whole of the change.
+With no photo of your own to hand, `Choose random image` picks one of the ones in the repository's `assets/` and credits the photographer who took it. Repeated clicks always land on a different photo, since the roll steps around the one already on screen. Trunk copies that directory beside the bundle rather than into it, since nine megabytes of JPEG would dwarf the WebAssembly module and be downloaded whether or not anyone picked one: a sample is fetched when it is asked for and not before. The list itself is read from the directory by `build.rs`, so adding or removing a photo there is the whole of the change.
 
 A sample arrives with the scale already set to a quarter of each side. They are twenty-megapixel photographs, and dithering one whole is seconds of work for a result nobody asked to wait for; a quarter is a sixteenth of the pixels and turns the sliders back into something you can drag. Set it back to `Photo's own size` under Framing when you want the full thing.
 

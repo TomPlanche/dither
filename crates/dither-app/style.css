@@ -319,13 +319,21 @@ legend {
   border-color: var(--rust-blue);
 }
 
-/* Sample picker */
+/* Sample picker. It sits directly in the panel's own column gap, so it brings no
+   margin of its own: a row of two things, and nothing around them. */
 
 .samples {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.35rem;
-  margin-top: 0.6rem;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* The stock photos are credited by name, and the row of names that used to do
+   that is now one button, so the credit follows the photo instead. */
+.credit {
+  color: var(--muted);
+  font-size: 0.78rem;
 }
 
 .sample {

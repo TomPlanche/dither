@@ -98,6 +98,9 @@ pub fn App() -> impl IntoView {
         });
     };
 
+    // Which sample is on screen: the credit names it, and the next roll steps around it.
+    let picked = RwSignal::new(None::<usize>);
+
     // A sample is a couple of megabytes over the network, so the row says so while one is on its way.
     let load_sample = move |file: &'static str| {
         fetching.set(true);
@@ -116,6 +119,23 @@ pub fn App() -> impl IntoView {
             fetching.set(false);
         });
     };
+
+    // One button for the whole set, so the roll is what picks the photo. It draws from the samples other than the
+    // one already on screen, which costs a `Vec` of indices and buys a second click that always changes something.
+    let choose_random = move || {
+        let others: Vec<usize> = (0..samples::SAMPLES.len())
+            .filter(|index| Some(*index) != picked.get_untracked())
+            .collect();
+        let Some(&index) = others.get((js_sys::Math::random() * others.len() as f64) as usize) else {
+            return;
+        };
+
+        picked.set(Some(index));
+        load_sample(samples::SAMPLES[index]);
+    };
+
+    // The row of names is gone, so the credit is what carries the photographer now.
+    let credit = Signal::derive(move || picked.get().map(|index| samples::labelled()[index].1.clone()));
 
     // What the number fields show: the working size once one is picked, and the photo's own until then.
     let sides = Signal::derive(move || {
@@ -199,36 +219,26 @@ pub fn App() -> impl IntoView {
                     </button>
                 </div>
 
-                <Show when=move || error.get().is_some()>
-                    <p class="error">{move || error.get().unwrap_or_default()}</p>
+                // One button and a credit, so it stays a row under the file picker rather than a
+                // panel of its own: a fieldset and its legend cost more height here than they explain.
+                // The fetch says so in the button's own label, which is the only place it can go now.
+                <Show when=move || !samples::SAMPLES.is_empty()>
+                    <div class="samples">
+                        <button
+                            class="sample"
+                            disabled=move || fetching.get()
+                            on:click=move |_| choose_random()
+                        >
+                            {move || if fetching.get() { "Fetching..." } else { "Choose random image" }}
+                        </button>
+                        <Show when=move || credit.get().is_some()>
+                            <span class="credit">"photo by " {move || credit.get()}</span>
+                        </Show>
+                    </div>
                 </Show>
 
-                <Show when=move || !samples::SAMPLES.is_empty()>
-                    <fieldset>
-                        <legend>"Samples"</legend>
-                        <p class="note">
-                            "Photos from the repository, served beside this page and fetched only when you pick one. Named for who took them, and loaded at a quarter of each side, since they are far too large to dither whole at any speed."
-                        </p>
-                        <div class="samples">
-                            {samples::labelled()
-                                .into_iter()
-                                .map(|(file, label)| {
-                                    view! {
-                                        <button
-                                            class="sample"
-                                            disabled=move || fetching.get()
-                                            on:click=move |_| load_sample(file)
-                                        >
-                                            {label}
-                                        </button>
-                                    }
-                                })
-                                .collect_view()}
-                        </div>
-                        <Show when=move || fetching.get()>
-                            <p class="note">"Fetching..."</p>
-                        </Show>
-                    </fieldset>
+                <Show when=move || error.get().is_some()>
+                    <p class="error">{move || error.get().unwrap_or_default()}</p>
                 </Show>
 
                 <fieldset>
